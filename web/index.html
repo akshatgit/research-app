@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Research App</title><link rel="stylesheet" href="/web/app.css"></head>
-<body><header><strong>Research App</strong><span id="topic-title">Choose a topic</span><nav><button id="document-tab">Document</button><button id="assets-tab">Assets</button><button id="runs-tab">Runs</button></nav></header>
+<body><header><strong>Research App</strong><button id="back-to-topics" hidden>&larr; Topics</button><span id="topic-title">Topics</span><nav><button id="document-tab">Document</button><button id="assets-tab">Assets</button><button id="runs-tab">Runs</button></nav></header>
 <div class="layout"><aside class="topics"><h2>Topics</h2><div id="topic-list"></div><form id="new-topic"><h3>New topic</h3><label>Title<input name="title" required></label><label>Focus<textarea name="focus" rows="3"></textarea></label><label>Backend<select name="backend"><option>claude</option><option>codex</option></select></label><button>Create and research</button></form></aside>
 <main><form id="instruct-form"><label>Research instruction<textarea name="instruction" placeholder="Add a section, check a claim, or build a chart" required></textarea></label><div class="row"><label>Backend<select name="backend"><option>claude</option><option>codex</option></select></label><button>Run instruction</button></div></form><section id="run-status" aria-live="polite"></section><section id="content" class="document"></section></main>
 <aside class="threads"><h2>Threads</h2><div id="thread-list"></div></aside></div>

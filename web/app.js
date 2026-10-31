@@ -15,11 +15,16 @@ async function refreshTopics() {
   for (const t of list) {const b = document.createElement('button'); b.className = 'topic' + (t.id === topicId ? ' active' : '');
     b.dataset.id = t.id; b.innerHTML = `<b></b><small></small>`; b.querySelector('b').textContent = t.title;
     b.querySelector('small').textContent = `${t.backend} · ${t.note_count} threads · ${new Date(t.created*1000).toLocaleDateString()}`;
-    b.onclick = () => openTopic(t.id); $('#topic-list').append(b); const del = document.createElement('button'); del.className='topic-delete'; del.textContent='Delete'; del.title=`Delete ${t.title}`; del.onclick=async()=>{if(!confirm(`Delete ${t.title} and its workspace?`))return; await api(`/api/topics/${encodeURIComponent(t.id)}`,'DELETE'); if(topicId===t.id){topicId=null;currentDoc='';threads=[];$('#content').replaceChildren();$('#thread-list').replaceChildren();$('#topic-title').textContent='Choose a topic'} await refreshTopics()}; $('#topic-list').append(del)}
-  if (!topicId && list.length) await openTopic(list[0].id);
+    b.onclick = () => openTopic(t.id); $('#topic-list').append(b); const del = document.createElement('button'); del.className='topic-delete'; del.textContent='Delete'; del.title=`Delete ${t.title}`; del.onclick=async()=>{if(!confirm(`Delete ${t.title} and its workspace?`))return; await api(`/api/topics/${encodeURIComponent(t.id)}`,'DELETE'); if(topicId===t.id){leaveTopic();return} await refreshTopics()}; $('#topic-list').append(del)}
 }
+// Focus mode: an open topic gets the whole screen; the topic list is its own page.
+function setFocus(on) {document.body.classList.toggle('focus', on); $('#back-to-topics').hidden = !on}
+function leaveTopic() {topicId = null; currentDoc = ''; threads = []; $('#content').replaceChildren(); $('#thread-list').replaceChildren();
+  $('#run-status').replaceChildren(); $('#topic-title').textContent = 'Topics'; setFocus(false);
+  if (location.hash) history.pushState(null, '', location.pathname); refreshTopics().catch(err => toast(err.message))}
 async function openTopic(id) {
-  topicId = id; view = 'document';
+  topicId = id; view = 'document'; setFocus(true);
+  if (location.hash !== `#${id}`) history.pushState(null, '', `#${id}`);
   const data = await api(url('')); currentDoc = data.doc; docVersion = data.doc_version;
   $('#topic-title').textContent = data.topic.title; $('#instruct-form').elements.backend.value = data.topic.backend;
   $('#ask-form').elements.backend.value = data.topic.backend;
@@ -86,15 +91,23 @@ function drawSVG(chart,data,spec) {
   const values=data.series.flatMap(s=>s.values).filter(x=>typeof x==='number'&&Number.isFinite(x)); const min=Math.min(0,...values), max=Math.max(1,...values), n=data.x.length;
   const X=i=>55+i*600/Math.max(1,n-1), Y=v=>275-(v-min)*230/(max-min);
   make('line',{x1:55,y1:275,x2:655,y2:275,stroke:'currentColor'});make('line',{x1:55,y1:45,x2:55,y2:275,stroke:'currentColor'});
-  const colors=['#1c8d90','#bb7254','#8255af','#d0a22e'];const tip=document.createElement('div');tip.className='tip';chart.append(tip);
+  const colors=['#1c8d90','#bb7254','#8255af','#d0a22e','#4f86c6'];
+  // Series named "threshold ..." are reference lines: dashed, no points.
+  const isRef=s=>/^threshold/i.test(s.name);const tip=document.createElement('div');tip.className='tip';chart.append(tip);
   data.series.forEach((s,j)=>{const points=s.values.map((v,i)=>typeof v==='number'?`${X(i)},${Y(v)}`:null).filter(Boolean);
-    if (spec.type==='line'||spec.type==='area') make('polyline',{points:points.join(' '),fill:'none',stroke:colors[j%colors.length],'stroke-width':3});
+    if (spec.type==='line'||spec.type==='area'||isRef(s)) make('polyline',{points:points.join(' '),fill:'none',stroke:colors[j%colors.length],'stroke-width':isRef(s)?2:3,...(isRef(s)?{'stroke-dasharray':'6 4'}:{})});
+    if (isRef(s)) return;
     s.values.forEach((v,i)=>{if(typeof v!=='number')return;let el;
       if(spec.type==='bar') el=make('rect',{x:X(i)-15+j*12,y:Y(v),width:11,height:275-Y(v),fill:colors[j%colors.length]});
       else el=make('circle',{cx:X(i),cy:Y(v),r:5,fill:colors[j%colors.length]});
       const title=document.createElementNS(NS,'title');title.textContent=`${data.x[i]} · ${s.name}: ${v}`;el.append(title);el.addEventListener('mouseenter',()=>tip.textContent=title.textContent);el.addEventListener('mouseleave',()=>tip.textContent='')})});
   data.x.forEach((x,i)=>{if(i%Math.ceil(n/8)!==0)return;const label=make('text',{x:X(i),y:300,'text-anchor':'middle',fill:'currentColor','font-size':12});label.textContent=x});
   for(const [v,y] of [[max,45],[min,275]]) {const label=make('text',{x:48,y,'text-anchor':'end',fill:'currentColor','font-size':12});label.textContent=Number(v.toFixed(2))}
+  // A legend whenever there is more than one series, so lines are identified by name, not colour alone.
+  if (data.series.length>1) {const legend=document.createElement('div');legend.className='legend';
+    data.series.forEach((s,j)=>{const item=document.createElement('span');const sw=document.createElement('i');
+      sw.style.borderTop=`3px ${isRef(s)?'dashed':'solid'} ${colors[j%colors.length]}`;item.append(sw,document.createTextNode(s.name));legend.append(item)});
+    svg.before(legend)}
 }
 async function renderMermaid(root) {if(!root.querySelector('.mermaid'))return;try {const mermaid=(await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs')).default;mermaid.initialize({startOnLoad:false,securityLevel:'strict'});await mermaid.run({nodes:root.querySelectorAll('.mermaid')})}catch(err){toast(`Diagram unavailable: ${err.message}`)}}
 $('#new-topic').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{const t=await api('/api/topics','POST',{title:f.elements.title.value,focus:f.elements.focus.value,backend:f.elements.backend.value});f.reset();await openTopic(t.id);await refreshTopics()}catch(err){toast(err.message)}};
@@ -107,4 +120,8 @@ function openAsk(question='What does this mean?'){if(!selected)return;$('#ask-qu
 $('#ask-button').onclick=()=>openAsk();document.querySelectorAll('[data-quick]').forEach(b=>b.onclick=()=>openAsk(b.dataset.quick));
 $('#ask-close').onclick=()=>$('#ask-dialog').close();$('#ask-form').onsubmit=async e=>{e.preventDefault();try{await api(url('/threads'),'POST',{...selected,question:e.currentTarget.elements.question.value,backend:e.currentTarget.elements.backend.value});$('#ask-dialog').close();await reloadThreads()}catch(err){toast(err.message)}};
 setInterval(async()=>{if(!topicId)return;try{const version=await api(url('/version'));if(version.doc_version!==docVersion){const data=await api(url(''));currentDoc=data.doc;docVersion=data.doc_version;if(view==='document')await showView()}if(version.active_runs||threads.some(t=>['queued','running'].includes(t.turns.at(-1)?.status))){await showRuns();await reloadThreads()}else await showRuns()}catch(err){toast(err.message)}},2000);
-refreshTopics().catch(err=>toast(err.message));
+$('#back-to-topics').onclick = leaveTopic;
+// The URL hash keeps you in a topic across reloads; Back/Forward move between list and topic.
+async function route() {const id = location.hash.slice(1); if (id && id !== topicId) {try {await openTopic(id)} catch {leaveTopic()}} else if (!id && topicId) leaveTopic()}
+addEventListener('popstate', () => route().catch(err => toast(err.message)));
+setFocus(false); refreshTopics().then(route).catch(err=>toast(err.message));
