@@ -206,6 +206,53 @@ There are no browser tests yet, so build it to REQUIREMENTS.md:
   labelled with backend/model), a follow-up box with a backend picker, Retry and Delete.
 - Light and dark themes via CSS custom properties and `prefers-color-scheme`.
 
+## v0.4: topic dashboard and comment-style threads
+
+New tests: `tests/test_tracker.py`, `tests/js/dashboard.test.mjs`,
+`tests/js/comments.test.mjs`, plus resolve tests in `test_store.py` and `test_api.py`.
+Requirements: TD1–TD10 and H1, H11–H15 in REQUIREMENTS.md.
+
+Contracts:
+- `docmodel.split_sections(md)` returns `[{id, title, markdown}]`. Text before the first `##`
+  (minus the H1) becomes `summary`. Ids are slugs, with `-2`, `-3` for duplicates. `##`
+  inside a fence doesn't count.
+- `research_app/tracker.py`: `STATUSES`, `load_tracker(workdir)`,
+  `build_overview(store, topic_id)` returning `{topic, workspace, stats, tracks,
+  sections, tracks_done, tracks_total, generated_at}`. Rules are in the test docstrings.
+- `GET /api/topics/{id}/overview`. `POST /api/topics/{id}/threads/{tid}/resolve
+  {"resolved": bool}`. `Store.set_thread_resolved(topic_id, thread_id, resolved)`, with
+  threads carrying `resolved` (default false) and `resolved_at`.
+- The research prompt explains `tracker.json` (schema in `tests/test_tracker.py`) and asks
+  the backend to keep it current.
+- `web/lib/dashboard.mjs`: `parseRoute`, `routeFor`, `relativeTime`, `citationTarget`.
+  `web/lib/comments.mjs`: `layoutCards`, `summarize`.
+
+UI. This replaces the earlier layout for an open topic; keep it plain, calm and dense, like
+a study tracker:
+- Header: `← Topics`, the topic title, the workspace path in small mono text, "refreshed
+  HH:MM:SS · auto-refresh 10s".
+- A tab bar under the header: Overview, one tab per section, Assets, Runs. The active tab
+  is underlined. The route is `#<topic>/<tab>`.
+- **Overview:** a row of stat tiles (big number, small label); "Tracks N/M done"; then a
+  3-column grid of track cards (1 column on narrow screens). Each card has the title, a
+  status pill (done green, running blue with a dot, pending grey, blocked amber, failed
+  red), "owner · updated 52m ago", the summary, files in mono (click to open in Assets) and
+  a collapsed "latest log lines" `<details>`. The "Start a track" box (instruction plus
+  backend) goes at the top of the Overview.
+- **Section tabs:** the section's Markdown on the left, a comment margin on the right. The
+  margin holds Google Docs-style cards positioned with `layoutCards` against each highlight's
+  `offsetTop`, re-laid out on render, resize and expand/collapse. Cards are collapsible:
+  collapsed shows `summarize()` (quote, question, "n replies", status). The expanded card
+  shows the turns (each labelled backend · model) and a reply box with a backend picker,
+  plus Resolve, Retry (on error) and Delete. A "Resolved (n)" group sits at the end of the
+  margin and orphaned threads are listed with a note. Clicking a highlight activates its
+  card and vice versa.
+- **New comment:** on text selection inside a section, show a small round comment button in
+  the margin at the selection's height. Clicking it opens a draft card there. No bottom
+  bar, no quick-action buttons, no modal dialog. Remove `#selection-actions` and
+  `#ask-dialog`.
+- Citations `[n]` on any tab use `citationTarget` to switch to the Sources tab and scroll.
+
 ## Definition of done
 
 - `make test` passes: every Python test (except the opt-in live ones) and every JS test.

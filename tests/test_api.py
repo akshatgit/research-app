@@ -291,3 +291,22 @@ class TestRequestSafety:  # N7
             pass  # the server may hang up before the client finishes sending
         # either way nothing was created and the server is still up
         assert server.client.get("/api/topics")[:2] == (200, [])
+
+
+class TestResolveApi:  # H14
+    def test_resolve_and_reopen(self, server, backends):
+        c = server.client
+        t = new_topic(c)
+        _, th, _ = c.post(f"/api/topics/{t['id']}/threads",
+                          {"quote": "Claim", "prefix": "", "suffix": "", "start": 0})
+        idle(server)
+        code, body, _ = c.post(f"/api/topics/{t['id']}/threads/{th['id']}/resolve",
+                               {"resolved": True})
+        assert code == 200 and body["resolved"] is True
+        assert c.get(f"/api/topics/{t['id']}/threads")[1][0]["resolved"] is True
+        assert c.post(f"/api/topics/{t['id']}/threads/{th['id']}/resolve",
+                      {"resolved": False})[1]["resolved"] is False
+        assert c.post(f"/api/topics/{t['id']}/threads/{th['id']}/resolve",
+                      {"resolved": "yes"})[0] == 400
+        assert c.post(f"/api/topics/{t['id']}/threads/missing/resolve",
+                      {"resolved": True})[0] == 404

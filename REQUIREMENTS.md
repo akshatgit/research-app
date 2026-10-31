@@ -1,4 +1,4 @@
-# Research App: Requirements (v0.3, 2026-10-31)
+# Research App: Requirements (v0.4, 2026-10-31)
 
 ## Purpose
 
@@ -74,12 +74,30 @@ Priority: **M** = must have for v1, **S** = should have, **C** = could have late
 | D7 | A history of document versions (from W5): see what a run changed (a diff) and restore an earlier version. | S |
 | D8 | A per-section badge shows which run and backend last changed it. | C |
 
+### Topic dashboard (focus mode)
+
+Opening a topic gives it the whole screen. The layout follows a study tracker: a header,
+tabs, and an Overview of stats and tracks.
+
+| ID | Requirement | Pri |
+|---|---|---|
+| TD1 | Inside a topic, only that topic is shown. A "Topics" button returns to the list. | M |
+| TD2 | The header shows the topic title, the workspace path, when the page last refreshed, and the auto-refresh interval (10 s, or 2 s while something runs). | M |
+| TD3 | Tabs: **Overview**, then one tab per `##` section of `doc.md` in document order (text before the first `##` becomes a "Summary" tab), then **Assets** and **Runs**. A `##` inside a code block is not a section. | M |
+| TD4 | Every tab has a URL, `#<topic id>/<tab id>`, e.g. `#9e6c…/overview`. Reload and Back/Forward keep the tab. A citation `[n]` on any tab opens the Sources tab at source n. | M |
+| TD5 | Overview shows **stat tiles** (big number plus label). They come from `tracker.json` `stats` when present, otherwise defaults: sources, charts, threads, runs, files. | M |
+| TD6 | Overview shows **tracks**: one card per line of work, with title, status pill (`done`, `running`, `pending`, `blocked`, `failed`), owner (claude, codex, you, script), when it last changed ("52m ago"), a summary, its files (each opens in the Assets view) and, collapsed, its latest log lines. A "Tracks N/M done" count heads the grid. | M |
+| TD7 | Tracks come from two places. Every research run is a track automatically (its instruction, status, backend, files changed and progress lines). The backend can also maintain `tracker.json` in the workspace, listing planned, pending or blocked tracks, its own stat tiles, and the run that carries out each track (`run_id`), so that a run and its planned track show as one card. | M |
+| TD8 | Overview has the "Start a track" box, which is the research instruction box with its backend picker. | M |
+| TD9 | The research prompt asks the backend to keep `tracker.json` up to date, using the schema in `tests/test_tracker.py`. | M |
+| TD10 | The threads panel shows on section tabs, where you highlight. It is hidden on Overview, Assets and Runs. | S |
+
 ### Highlights and threads
 
 | ID | Requirement | Pri |
 |---|---|---|
-| H1 | Select any text in the document and click "Ask" to open a box with a question. The default question is "What does this mean?" | M |
-| H2 | Quick actions on a selection: **Explain**, **Is this true?** (checks the claim against sources or the web), **Go deeper**, **Example**. | S |
+| H1 | Select any text in the document and a small comment button appears beside the selection, in the margin, like Google Docs. There is no toolbar or bottom bar. Clicking it opens a draft comment card next to the passage, with a question box (default "What does this mean?"), a backend picker and Comment/Cancel. | M |
+| H2 | ~~Quick actions on a selection~~: dropped in v0.4 at the user's request. Questions are typed in the draft comment card. | — |
 | H3 | Each highlight becomes a thread: the passage, your question, the backend's answer, then follow-ups. | M |
 | H4 | Answers stream in or show live progress. They render as Markdown with sources when the backend used any. | M |
 | H5 | The backend gets the document, the passage with its surrounding text, the earlier turns of that thread, and access to the workspace files. | M |
@@ -88,6 +106,11 @@ Priority: **M** = must have for v1, **S** = should have, **C** = could have late
 | H8 | Each answer shows which backend and model produced it. Any question or follow-up can pick its backend, and you can re-ask on the other one to compare. | M |
 | H9 | From a thread: **Add to document** turns the answer (and any chart it made) into a new or revised section. Answers may also create assets directly, e.g. "plot this". | S |
 | H10 | Delete a thread, and retry an answer that failed. | M |
+| H11 | **Threads look and behave like Google Docs comments.** Each thread is a comment card in the right margin, lined up with its highlighted passage. Cards never overlap: a card that would collide moves down. The active card sits exactly beside its passage and the cards around it make room. | M |
+| H12 | Clicking a highlight activates its card. Clicking a card scrolls to and emphasises its highlight. Only one card is active at a time. | M |
+| H13 | **Cards are collapsible.** A collapsed card shows the quoted passage (one line), the first question, the reply count and the status (answering, done, error). Expanded, it shows every turn and the reply box. New cards and the active card are expanded; others default to collapsed; your choice per card is remembered in the browser. | M |
+| H14 | **Resolve and reopen.** Resolving a thread removes its highlight and moves it to a collapsed "Resolved (n)" list at the end of the margin. Reopening restores it. Resolution is stored with the thread, so it survives reloads and devices. | M |
+| H15 | Threads whose passage was removed from the document ("orphaned", H6) are listed under the active cards with a note, not dropped. | M |
 
 ### General questions
 

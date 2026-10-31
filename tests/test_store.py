@@ -226,3 +226,19 @@ class TestRunsAndAssets:
         # bookkeeping files are not assets
         assert not any(p.startswith(("threads/", "runs/", ".git")) or p in ("topic.json", "doc.md")
                        for p in assets)
+
+
+# ---------- comment resolution (H14) ----------
+
+class TestResolve:
+    def test_threads_start_unresolved_and_can_be_resolved(self, store):
+        t = store.create_topic("A")
+        th = store.create_thread(t["id"], quote="q", prefix="", suffix="", start=0,
+                                 question="?", backend="claude")
+        assert th["resolved"] is False
+        got = store.set_thread_resolved(t["id"], th["id"], True)
+        assert got["resolved"] is True and got["resolved_at"] > 0
+        assert store.get_thread(t["id"], th["id"])["resolved"] is True
+        got = store.set_thread_resolved(t["id"], th["id"], False)
+        assert got["resolved"] is False
+        assert store.get_thread(t["id"], th["id"])["turns"] == th["turns"]   # nothing lost
