@@ -10,6 +10,7 @@ from .docmodel import load_table, parse_viz_blocks, validate_viz
 from .fsutil import safe_join
 from .service import Service
 from .store import Store
+from .tracker import build_overview
 
 WEB = Path(__file__).resolve().parent.parent / 'web'
 MAX_BODY = 2 * 1024 * 1024
@@ -114,6 +115,8 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765):
                             return self._send(204)
                     if tail == ['version'] and self.command == 'GET':
                         return self._send(200, {'doc_version': service.store.doc_version(tid), 'active_runs': service.active_runs(tid)})
+                    if tail == ['overview'] and self.command == 'GET':
+                        return self._send(200, build_overview(service.store, tid))
                     if tail == ['instruct'] and self.command == 'POST':
                         body = self._body()
                         if body is not None:
@@ -141,7 +144,7 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765):
                         if self.command == 'POST':
                             body = self._body()
                             if body is not None:
-                                return self._send(201, service.ask(tid, body.get('quote', ''), body.get('prefix', ''), body.get('suffix', ''), body.get('start', 0), body.get('question', ''), body.get('backend')))
+                                return self._send(201, service.ask(tid, body.get('quote', ''), body.get('prefix', ''), body.get('suffix', ''), body.get('start', 0), body.get('question', ''), body.get('backend'), body.get('section_id')))
                     if len(tail) >= 2 and tail[0] == 'threads':
                         thread_id = tail[1]
                         if len(tail) == 2 and self.command == 'DELETE':
@@ -155,6 +158,8 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765):
                                 return self._send(202, service.follow_up(tid, thread_id, body.get('question', ''), body.get('backend')))
                             if tail[2] == 'retry':
                                 return self._send(202, service.retry(tid, thread_id))
+                            if tail[2] == 'resolve':
+                                return self._send(200, service.store.set_thread_resolved(tid, thread_id, body.get('resolved')))
                 self._send(404, {'error': 'not found'})
             except KeyError as exc:
                 self._send(404, {'error': str(exc)})

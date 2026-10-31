@@ -104,3 +104,38 @@ def check_citations(doc):
     plain = re.sub(r'^## Sources\s*\n.*?\Z', '', plain, flags=re.M | re.S | re.I)
     cited = {int(n) for n in re.findall(r'\[(\d+)\](?!\()', plain)}
     return {'missing': sorted(cited - sources.keys()), 'unused': sorted(sources.keys() - cited)}
+
+
+def split_sections(md):
+    """Split level-two sections while ignoring headings inside fenced code."""
+    if not md.strip():
+        return []
+    lines = md.splitlines(keepends=True)
+    starts = []
+    fence = None
+    for index, line in enumerate(lines):
+        marker = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if marker:
+            token = marker.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence is None:
+            heading = re.match(r'^##\s+(.+?)\s*$', line)
+            if heading:
+                starts.append((index, heading.group(1).strip().rstrip('#').strip()))
+    sections = []
+    preface = ''.join(lines[:starts[0][0] if starts else len(lines)])
+    preface = re.sub(r'^#\s+[^\n]*(?:\n|$)', '', preface, count=1).strip()
+    if preface:
+        sections.append({'id': 'summary', 'title': 'Summary', 'markdown': preface})
+    counts = {'summary': 1} if preface else {}
+    for number, (start, title) in enumerate(starts):
+        slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-') or 'section'
+        counts[slug] = counts.get(slug, 0) + 1
+        section_id = slug if counts[slug] == 1 else f'{slug}-{counts[slug]}'
+        end = starts[number + 1][0] if number + 1 < len(starts) else len(lines)
+        sections.append({'id': section_id, 'title': title, 'markdown': ''.join(lines[start:end]).strip()})
+    return sections

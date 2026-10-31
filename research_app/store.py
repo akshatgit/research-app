@@ -80,23 +80,36 @@ class Store:
             raise KeyError(thread_id)
         return p
 
-    def create_thread(self, topic_id, quote, prefix, suffix, start, question, backend):
+    def create_thread(self, topic_id, quote, prefix, suffix, start, question, backend, section_id=None):
         d = self.topic_dir(topic_id)
         if not isinstance(quote, str) or not quote.strip() or backend not in ('claude', 'codex'):
             raise ValueError('invalid thread')
         tid = uuid.uuid4().hex
         th = {'id': tid, 'topic_id': topic_id, 'quote': quote, 'prefix': prefix, 'suffix': suffix,
-              'start': start, 'created': time.time(), 'sessions': {},
+              'start': start, 'section_id': section_id, 'created': time.time(), 'sessions': {}, 'resolved': False, 'resolved_at': None,
               'turns': [{'role': 'user', 'text': question or 'What does this mean?', 'backend': backend, 'at': time.time()}]}
         self._write_json(d / 'threads' / f'{tid}.json', th)
         return th
 
     def get_thread(self, topic_id, thread_id):
-        return json.loads(self._thread_path(topic_id, thread_id).read_text())
+        th = json.loads(self._thread_path(topic_id, thread_id).read_text())
+        th.setdefault('resolved', False)
+        th.setdefault('resolved_at', None)
+        return th
 
     def list_threads(self, topic_id):
         d = self.topic_dir(topic_id)
-        return sorted((json.loads(p.read_text()) for p in (d / 'threads').glob('*.json')), key=lambda t: t['created'])
+        return sorted((self.get_thread(topic_id, p.stem) for p in (d / 'threads').glob('*.json')), key=lambda t: t['created'])
+
+    def set_thread_resolved(self, topic_id, thread_id, resolved):
+        if not isinstance(resolved, bool):
+            raise ValueError('resolved must be a boolean')
+        with self.lock:
+            th = self.get_thread(topic_id, thread_id)
+            th['resolved'] = resolved
+            th['resolved_at'] = time.time() if resolved else None
+            self._write_json(self._thread_path(topic_id, thread_id), th)
+            return th
 
     def append_turn(self, topic_id, thread_id, turn):
         with self.lock:

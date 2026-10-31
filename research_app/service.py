@@ -42,9 +42,9 @@ class Service:
         prompt = research_prompt(topic, instruction, self.store.read_doc(topic_id))
         return self._enqueue(topic_id, 'research', name, prompt, instruction=instruction)
 
-    def ask(self, topic_id, quote, prefix, suffix, start, question, backend=None):
+    def ask(self, topic_id, quote, prefix, suffix, start, question, backend=None, section_id=None):
         name = self._backend(topic_id, backend)
-        th = self.store.create_thread(topic_id, quote, prefix, suffix, start, question, name)
+        th = self.store.create_thread(topic_id, quote, prefix, suffix, start, question, name, section_id=section_id)
         self._answer(topic_id, th['id'], th['turns'][0]['text'], name)
         return th
 
