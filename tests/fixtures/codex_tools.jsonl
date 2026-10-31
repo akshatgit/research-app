@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"0aaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"web_search","query":"formal verification SRE"}}
+{"type":"item.completed","item":{"id":"item_0","type":"web_search","query":"formal verification SRE"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"python3 make_chart.py","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"python3 make_chart.py","aggregated_output":"wrote assets/data.csv\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"doc.md","kind":"update"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Done. Added a chart."}}
+{"type":"turn.completed","usage":{"input_tokens":20000,"cached_input_tokens":15000,"cache_write_input_tokens":0,"output_tokens":400,"reasoning_output_tokens":100}}

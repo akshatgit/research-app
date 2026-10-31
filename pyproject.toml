@@ -1,0 +1,14 @@
+[project]
+name = "research-app"
+version = "0.1.0"
+description = "Personal research app: running documents with visualizations, Claude/Codex CLI backends"
+requires-python = ">=3.12"
+dependencies = []          # runtime is standard library only (N2)
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
