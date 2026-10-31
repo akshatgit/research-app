@@ -253,6 +253,47 @@ a study tracker:
   `#ask-dialog`.
 - Citations `[n]` on any tab use `citationTarget` to switch to the Sources tab and scroll.
 
+## v0.5: every record in the topic folder; prompts ordered for caching
+
+New tests: `tests/test_records.py` and `tests/js/usage.test.mjs`. `tests/conftest.py`'s
+FakeBackend now returns raw events and stderr and keeps transcripts in a fake CLI home.
+Requirements: R1–R7 in REQUIREMENTS.md.
+
+Contracts:
+- `RunResult` gains `raw: list[str]` (every stdout line, verbatim, in order) and
+  `stderr: str`. `RunResult.usage` stays the CLI's raw usage dict.
+- `backends.base.normalize_usage(backend_name, usage)` returns `{input, cached,
+  cache_write, output}`. The mapping is in R6.
+- `ClaudeCLI(binary="claude", home=None)` and `CodexCLI(binary="codex", home=None)`. `home`
+  defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`, and `$CODEX_HOME` or `~/.codex`. Each has
+  `transcript_path(session_id, workdir) -> Path | None`. Claude:
+  `home/projects/*/<sid>.jsonl`. Codex: `home/sessions/**/rollout-*-<sid>.jsonl`. Both are
+  verified against real CLI installs.
+- Store layout: `threads/<tid>/thread.json` plus `threads/<tid>/turns/NNN-...`, and
+  `runs/<rid>/run.json` plus `prompt.md`, `events.jsonl` and `stderr.log`. Reading must also
+  accept v0.4 files (`threads/<tid>.json`, `runs/<rid>.json`). Any write moves a legacy
+  thread or run to the new layout and removes the old file.
+- Service: after each run, write the run folder files and, for answers, the turn files
+  (the prompt and events go with the assistant turn's number). Copy the transcript to
+  `sessions/<backend>/<sid>.jsonl`, overwriting the old copy. Set `run["transcript"]` to that
+  relative path, or `None` if no transcript was found. Store normalised `usage` and
+  `cost_usd` on both the run and the assistant turn.
+- `prompts.py`: put the stable parts first (rules, topic, `## Current doc.md`) and the
+  varying parts last (instruction; or passage, surrounding text, earlier turns, question).
+  The existing tests still require all the same content to be present.
+- `snapshot`/`diff_snapshots` and `list_assets` ignore `sessions/`, and `safe_join`
+  refuses it, just like `threads/` and `runs/`.
+- **Tabs (TD3, revised):** one Document tab by default. `load_tracker` always returns
+  `tabs` (`"single"` or `"sections"`; anything else gives `"single"` plus an error).
+  `build_overview` adds `layout` (the same value) and `tabs` (`[{id, title}]`): Overview,
+  Document, Assets, Runs; or, when split, Overview, one tab per section, Assets, Runs. The UI
+  renders tabs from `overview.tabs`. The Document tab renders the whole `doc.md` with the
+  comment margin. `citationTarget(n, tabs)` picks Sources or Document. The research prompt
+  explains `"tabs"` and says to use `"sections"` only when the parts are separate workstreams.
+- UI: under each assistant turn in a comment card, show `formatUsage(turn.usage,
+  turn.cost_usd)` from `web/lib/usage.mjs` in small muted text. In the Runs view, show it
+  per run.
+
 ## Definition of done
 
 - `make test` passes: every Python test (except the opt-in live ones) and every JS test.

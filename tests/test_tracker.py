@@ -81,7 +81,8 @@ def write_tracker(d, data):
 
 class TestLoadTracker:
     def test_missing_file(self, tmp_path):
-        assert load_tracker(tmp_path) == {"stats": [], "tracks": [], "errors": []}
+        assert load_tracker(tmp_path) == {"stats": [], "tracks": [], "errors": [],
+                                          "tabs": "single"}
 
     def test_valid(self, tmp_path):
         write_tracker(tmp_path, {"stats": [{"label": "Live", "value": 143}],
@@ -223,7 +224,7 @@ def test_overview_endpoint(server, backends):
     code, body, _ = c.get(f"/api/topics/{t['id']}/overview")
     assert code == 200
     assert set(body) >= {"topic", "workspace", "stats", "tracks", "sections", "tracks_done",
-                         "tracks_total", "generated_at"}
+                         "tracks_total", "generated_at", "tabs", "layout"}
     assert c.get("/api/topics/nope/overview")[0] == 404
 
 
@@ -235,3 +236,43 @@ def test_research_prompt_asks_for_tracker(service, backends):  # TD9
     assert "tracker.json" in p
     for status in ("done", "running", "pending", "blocked"):
         assert status in p
+
+
+# ---------- TD3 (v0.5): one document by default; split only when the topic asks ----------
+
+class TestTabs:
+    def topic(self, store):
+        t = store.create_topic("SLO study")
+        store.write_doc(t["id"], DOC)
+        return t, store.topic_dir(t["id"])
+
+    def test_single_document_by_default(self, store):
+        t, d = self.topic(store)
+        o = build_overview(store, t["id"])
+        assert o["layout"] == "single"
+        assert [x["id"] for x in o["tabs"]] == ["overview", "document", "assets", "runs"]
+        assert [x["title"] for x in o["tabs"]] == ["Overview", "Document", "Assets", "Runs"]
+        assert len(o["sections"]) == 5   # still available, e.g. for a table of contents
+
+    def test_split_when_tracker_asks(self, store):
+        t, d = self.topic(store)
+        write_tracker(d, {"tabs": "sections"})
+        o = build_overview(store, t["id"])
+        assert o["layout"] == "sections"
+        assert [x["id"] for x in o["tabs"]] == ["overview", "summary", "the-policy",
+                                                "live-experiments", "live-experiments-2",
+                                                "sources", "assets", "runs"]
+
+    def test_unknown_tabs_value_falls_back_to_single(self, store):
+        t, d = self.topic(store)
+        write_tracker(d, {"tabs": "columns"})
+        o = build_overview(store, t["id"])
+        assert o["layout"] == "single" and load_tracker(d)["errors"]
+
+
+def test_research_prompt_explains_when_to_split(service, backends):
+    t = service.create_topic("X", research=False)
+    service.instruct(t["id"], "go")
+    assert service.wait_idle(10)
+    p = backends["claude"].requests[-1].prompt
+    assert '"tabs"' in p and '"sections"' in p and '"single"' in p

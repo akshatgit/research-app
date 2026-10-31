@@ -3,7 +3,7 @@
 //   parseRoute(hash) -> {topicId, tab}          ("" or "#" -> {topicId: null, tab: null})
 //   routeFor(topicId, tab = "overview") -> "#<topicId>/<tab>"
 //   relativeTime(ts, now) -> "7s ago" | "52m ago" | "3h ago" | "2d ago" | "—" (ts null)
-//   citationTarget(n, sections) -> {tab: "sources", anchor: "src-<n>"} | null (no Sources tab)
+//   citationTarget(n, tabs) -> {tab: "sources" or "document", anchor: "src-<n>"} | null
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseRoute, routeFor, relativeTime, citationTarget } from "../../web/lib/dashboard.mjs";
@@ -33,7 +33,10 @@ test("relativeTime", () => {
 });
 
 test("citationTarget", () => {
-  const sections = [{ id: "summary" }, { id: "the-policy" }, { id: "sources" }];
-  assert.deepEqual(citationTarget(3, sections), { tab: "sources", anchor: "src-3" });
+  // citationTarget(n, tabs): the Sources tab when the topic is split, else the Document tab.
+  const split = [{ id: "overview" }, { id: "summary" }, { id: "the-policy" }, { id: "sources" }];
+  assert.deepEqual(citationTarget(3, split), { tab: "sources", anchor: "src-3" });
+  const single = [{ id: "overview" }, { id: "document" }, { id: "assets" }, { id: "runs" }];
+  assert.deepEqual(citationTarget(3, single), { tab: "document", anchor: "src-3" });
   assert.equal(citationTarget(3, [{ id: "summary" }]), null);
 });

@@ -166,7 +166,8 @@ class TestThreads:
         assert (first["role"], first["text"], first["backend"]) == \
             ("user", "What does this mean?", "codex")
         assert first["at"] > 0
-        assert (store.topic_dir(t["id"]) / "threads" / f"{th['id']}.json").is_file()
+        # v0.5 layout (R1): one folder per thread
+        assert (store.topic_dir(t["id"]) / "threads" / th["id"] / "thread.json").is_file()
 
     def test_append_and_update_turns(self, store):
         t, th = self.make(store)

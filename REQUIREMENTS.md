@@ -1,4 +1,4 @@
-# Research App: Requirements (v0.4, 2026-10-31)
+# Research App: Requirements (v0.5, 2026-10-31)
 
 ## Purpose
 
@@ -83,14 +83,14 @@ tabs, and an Overview of stats and tracks.
 |---|---|---|
 | TD1 | Inside a topic, only that topic is shown. A "Topics" button returns to the list. | M |
 | TD2 | The header shows the topic title, the workspace path, when the page last refreshed, and the auto-refresh interval (10 s, or 2 s while something runs). | M |
-| TD3 | Tabs: **Overview**, then one tab per `##` section of `doc.md` in document order (text before the first `##` becomes a "Summary" tab), then **Assets** and **Runs**. A `##` inside a code block is not a section. | M |
-| TD4 | Every tab has a URL, `#<topic id>/<tab id>`, e.g. `#9e6c…/overview`. Reload and Back/Forward keep the tab. A citation `[n]` on any tab opens the Sources tab at source n. | M |
+| TD3 | Tabs: **Overview**, **Document** (the whole `doc.md`, one continuous page), **Assets**, **Runs**. A topic is divided into section tabs **only when it makes sense**: when its `tracker.json` sets `"tabs": "sections"`, each `##` section becomes its own tab in place of Document (text before the first `##` becomes "Summary"; a `##` inside a code block is not a section). The default is `"single"`. The research prompt tells the backend to choose `sections` only for studies whose parts are separate workstreams. (Revised in v0.5; v0.4 always split.) | M |
+| TD4 | Every tab has a URL, `#<topic id>/<tab id>`, e.g. `#9e6c…/overview`. Reload and Back/Forward keep the tab. A citation `[n]` scrolls to source n: within the Document tab, or on the Sources tab when the topic is split. | M |
 | TD5 | Overview shows **stat tiles** (big number plus label). They come from `tracker.json` `stats` when present, otherwise defaults: sources, charts, threads, runs, files. | M |
 | TD6 | Overview shows **tracks**: one card per line of work, with title, status pill (`done`, `running`, `pending`, `blocked`, `failed`), owner (claude, codex, you, script), when it last changed ("52m ago"), a summary, its files (each opens in the Assets view) and, collapsed, its latest log lines. A "Tracks N/M done" count heads the grid. | M |
 | TD7 | Tracks come from two places. Every research run is a track automatically (its instruction, status, backend, files changed and progress lines). The backend can also maintain `tracker.json` in the workspace, listing planned, pending or blocked tracks, its own stat tiles, and the run that carries out each track (`run_id`), so that a run and its planned track show as one card. | M |
 | TD8 | Overview has the "Start a track" box, which is the research instruction box with its backend picker. | M |
 | TD9 | The research prompt asks the backend to keep `tracker.json` up to date, using the schema in `tests/test_tracker.py`. | M |
-| TD10 | The threads panel shows on section tabs, where you highlight. It is hidden on Overview, Assets and Runs. | S |
+| TD10 | The comment margin shows on the Document tab (or on section tabs when split), where you highlight. It is hidden on Overview, Assets and Runs. | S |
 
 ### Highlights and threads
 
@@ -117,6 +117,21 @@ tabs, and an Overview of stats and tracks.
 | ID | Requirement | Pri |
 |---|---|---|
 | Q1 | Ask a topic-level question that isn't tied to a highlight. | S |
+
+### Workspace records (v0.5)
+
+Everything about a topic lives in its folder, including the full conversations with each
+backend, so a topic can be read, copied or audited on its own.
+
+| ID | Requirement | Pri |
+|---|---|---|
+| R1 | Each thread is a folder `threads/<tid>/` holding `thread.json` (anchor, status, resolved, sessions, turns with metadata) and `turns/`. Each turn is numbered from `001`. A question is `NNN-user.md`. An answer is `NNN-<backend>.md`, with the exact prompt sent as `NNN-<backend>.prompt.md` and the raw CLI event stream as `NNN-<backend>.events.jsonl` (every stdout line, verbatim). | M |
+| R2 | Each run is a folder `runs/<rid>/` holding `run.json`, `prompt.md`, `events.jsonl` (raw stdout) and `stderr.log`. | M |
+| R3 | After every run, the CLI's own full session transcript is copied into `sessions/<backend>/<session id>.jsonl`. Claude: `$CLAUDE_CONFIG_DIR/projects/*/<session id>.jsonl` (default `~/.claude`). Codex: `$CODEX_HOME/sessions/**/rollout-*-<session id>.jsonl` (default `~/.codex`). A missing transcript is noted in the run record, not an error. | M |
+| R4 | Topics in the v0.4 layout (`threads/<tid>.json`, `runs/<rid>.json`) still load, and are moved to the new layout the first time they are written. Nothing is lost. | M |
+| R5 | **Prompts are ordered for prompt caching:** stable content first (rules, topic, then `doc.md`), and what varies per request (instruction, passage, history, question) last. Two requests on the same document share a prefix that includes the whole document. | M |
+| R6 | Each answer and run records normalised token usage, `{input, cached, cache_write, output}` (Claude: `cache_read_input_tokens` → cached, `cache_creation_input_tokens` → cache_write; Codex: `cached_input_tokens` is part of `input_tokens`, so input = input_tokens − cached_input_tokens), plus `cost_usd` when the CLI reports it. Comment cards show it compactly, e.g. "11.3k cached · 2 in · 4 out · $0.10". | M |
+| R7 | Records, transcripts and sessions are bookkeeping: they are not listed as assets, not counted in `files_changed`, and not served by the files API. | M |
 
 ## Backend requirements
 

@@ -75,9 +75,11 @@ class FakeBackend:
         ok, error_kind, error, sleep, session_id
     """
 
-    def __init__(self, name, model="fake-model"):
+    def __init__(self, name, model="fake-model", home=None):
         self.name = name
         self.model = model
+        # Stands in for ~/.claude or ~/.codex: where the CLI keeps its own session transcripts.
+        self.home = Path(home) if home else None
         self.requests: list[RunRequest] = []
         self.script = lambda req: {}
         self.calls = 0
@@ -101,20 +103,34 @@ class FakeBackend:
             p.write_text(content)
         if on_event:
             on_event(Event(kind="text", text=s.get("text", f"answer from {self.name}")))
+        text = s.get("text", f"answer from {self.name}")
+        raw = [json.dumps({"type": "fake.start", "call": self.calls}),
+               json.dumps({"type": "fake.text", "text": text})]
         if s.get("ok", True) is False:
             return RunResult(ok=False, error_kind=s.get("error_kind", "failed"),
-                             error=s.get("error", "boom"), command=[self.name], exit_code=1)
-        return RunResult(ok=True, text=s.get("text", f"answer from {self.name}"),
-                         session_id=s.get("session_id", f"{self.name}-session-{self.calls}"),
+                             error=s.get("error", "boom"), command=[self.name], exit_code=1,
+                             raw=raw, stderr="fake failure\n")
+        session = s.get("session_id", req.session_id or f"{self.name}-session-{self.calls}")
+        if self.home is not None:
+            self.home.mkdir(parents=True, exist_ok=True)
+            with open(self.home / f"{session}.jsonl", "a") as f:
+                f.write(json.dumps({"prompt": req.prompt[:200], "answer": text}) + "\n")
+        return RunResult(ok=True, text=text, session_id=session,
                          usage={"input_tokens": 10, "output_tokens": 5}, cost_usd=0.01,
                          command=[self.name, "--fake"], exit_code=0, duration_s=0.01,
-                         model=self.model)
+                         model=self.model, raw=raw, stderr="")
+
+    def transcript_path(self, session_id, workdir):
+        if self.home is None:
+            return None
+        p = self.home / f"{session_id}.jsonl"
+        return p if p.exists() else None
 
 
 @pytest.fixture
-def backends():
-    return {"claude": FakeBackend("claude", "claude-opus-5-5"),
-            "codex": FakeBackend("codex", "gpt-5-codex")}
+def backends(tmp_path):
+    return {"claude": FakeBackend("claude", "claude-opus-5-5", home=tmp_path / "claude-home"),
+            "codex": FakeBackend("codex", "gpt-5-codex", home=tmp_path / "codex-home")}
 
 
 @pytest.fixture
