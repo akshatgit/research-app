@@ -1,0 +1,1 @@
+"""Local personal research app."""

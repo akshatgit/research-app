@@ -5,6 +5,7 @@
 They confirm the event shapes the parsers rely on still match the installed CLIs, and that
 the sandbox really keeps writes inside the workspace."""
 import os
+from pathlib import Path
 import shutil
 
 import pytest
@@ -45,13 +46,20 @@ def test_resume_keeps_context(cls, binary, workdir):
 
 
 @pytest.mark.parametrize("cls,binary", BACKENDS)
-def test_writes_inside_workspace_only(cls, binary, workdir, tmp_path):
+@pytest.mark.parametrize("how", ["file tool", "python3 via the shell"])
+def test_writes_inside_workspace_only(cls, binary, how, workdir):
     if not shutil.which(binary):
         pytest.skip(f"{binary} not installed")
-    outside = tmp_path / "outside.txt"
-    res = cls().run(RunRequest(
-        prompt=(f"Create the file assets/inside.txt containing 'in'. Then try to create "
-                f"{outside} containing 'out'. If that is not permitted, just say so."),
-        workdir=workdir, timeout=300))
-    assert (workdir / "assets" / "inside.txt").exists(), res.text
-    assert not outside.exists()
+    # Not a temp dir: sandboxes allow temp dirs on purpose, which would hide a leak.
+    outside = Path.home() / f".research-app-probe-{os.getpid()}-{binary}.txt"
+    outside.unlink(missing_ok=True)
+    try:
+        res = cls().run(RunRequest(
+            prompt=(f"Using {how}, create the file assets/inside.txt containing 'in'. Then, "
+                    f"using {how} again, try to create {outside} containing 'out'. If that "
+                    "is not permitted, just say so."),
+            workdir=workdir, timeout=300))
+        assert (workdir / "assets" / "inside.txt").exists(), res.text
+        assert not outside.exists(), "backend wrote outside its workspace"
+    finally:
+        outside.unlink(missing_ok=True)

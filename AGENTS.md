@@ -95,11 +95,18 @@ def classify_error(text: str) -> str   # "rate_limit" | "auth" | "failed"
 
 ### CLI invocation (verified against Claude Code 2.1.311 and codex-cli 0.162.1)
 
-**Claude**: `claude -p --output-format stream-json --verbose --allowedTools <list>
-[--resume ID] [--model M]`, run with `cwd=workdir`, prompt written to **stdin**.
-- Allow-list: `WebSearch WebFetch Read Write Edit Glob Grep` plus a scoped Bash pattern for
-  running code (e.g. `Bash(python3:*)`). Claude Code already confines file edits to the
-  working directory, so don't pass `--add-dir` outside it.
+**Claude**: `claude -p --output-format stream-json --verbose --permission-mode dontAsk
+--settings <sandbox json> --allowedTools <list> [--resume ID] [--model M]`, run with `cwd=workdir`, prompt written to **stdin**.
+- Always pass `--permission-mode dontAsk`, and scope file rules to the workspace:
+  `WebSearch WebFetch Read(./**) Edit(./**) Write(./**) Bash(python3:*)`. Never use bare
+  `Read`/`Write`/`Edit`/`Glob`/`Grep`, which allow any path. Without an explicit mode, the
+  user's own default applies. With `"defaultMode": "auto"`, a live test showed writes
+  outside the workspace and reads of `~` being auto-approved. Don't pass `--add-dir`.
+- **Bash is not covered by that.** Always pass `--settings` with
+  `{"sandbox": {"enabled": true, "autoAllowBashIfSandboxed": true,
+  "allowUnsandboxedCommands": false}}`. That turns on Claude Code's OS sandbox for commands.
+  It was verified on Claude Code 2.1.311: without it, `python3 -c` wrote to `~/Documents`;
+  with it, the write was blocked.
 - Events, one JSON object per line: `system/init` (session_id, model); `assistant`
   (`message.content[]` with `text` and `tool_use` blocks, the latter giving tool progress);
   `user` (tool results, ignore); `result` (`result`, `is_error`, `subtype`, `session_id`,
@@ -109,7 +116,7 @@ def classify_error(text: str) -> str   # "rate_limit" | "auth" | "failed"
 -c web_search="live" [-m M] -`. The trailing `-` reads the prompt from **stdin**. Codex
 reads stdin whenever it is open, so always write the prompt and close it.
 - Resume: `codex exec --json -c sandbox_mode="workspace-write" -c web_search="live"
-  [-m M] resume <SESSION_ID> -` with `cwd=workdir`. `exec resume` has no `-s` or `-C`
+  --skip-git-repo-check [-m M] resume <SESSION_ID> -` with `cwd=workdir`. `exec resume` has no `-s` or `-C`
   flag, which is why the sandbox goes in as config.
 - The web search config key is an assumption from Codex's current config schema. Confirm it
   with `make test-live` and adjust if the CLI rejects it. The unit test only requires that

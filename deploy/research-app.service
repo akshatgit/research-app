@@ -1,0 +1,20 @@
+# systemd user unit for research-app. Installed by deploy/install.sh, which fills in
+# @APP_DIR@ and writes the environment file. Runs as you, so the claude and codex CLIs
+# use your own logins. Listens on 127.0.0.1 only; reach it with an SSH tunnel.
+[Unit]
+Description=Research App (personal research workspace)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=%h/.config/research-app/env
+ExecStart=/usr/bin/env python3 -m research_app --port ${RESEARCH_APP_PORT} --data ${RESEARCH_APP_DATA}
+Restart=on-failure
+RestartSec=5
+# Backend runs can take minutes; give them time to finish on stop/restart.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

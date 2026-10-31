@@ -11,7 +11,7 @@ test-py:
 	$(PY) -m pytest -q
 
 test-js:
-	node --test tests/js/
+	node --test tests/js/*.mjs
 
 test-live:
 	RESEARCH_APP_LIVE=1 $(PY) -m pytest tests/test_live.py -v

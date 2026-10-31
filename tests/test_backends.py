@@ -130,15 +130,29 @@ class TestClaude:
         joined = " ".join(argv)
         assert "--dangerously-skip-permissions" not in argv
         assert "--allow-dangerously-skip-permissions" not in argv
-        assert arg_after(argv, "--permission-mode") in (None, "acceptEdits", "default", "dontAsk")
+        # dontAsk denies anything not allowed. Leaving it unset inherits the user's own mode,
+        # e.g. "auto", which auto-approved writes outside the workspace in a live test.
+        assert arg_after(argv, "--permission-mode") == "dontAsk"
         allowed = arg_after(argv, "--allowedTools", "--allowed-tools")
         assert allowed, "must pass an explicit tool allow-list"
         for tool in ("WebSearch", "WebFetch", "Read", "Write", "Edit"):
             assert tool in joined
+        # file tools are scoped to the workspace; a bare rule allows any path
+        for tool in ("Read", "Write", "Edit", "Glob", "Grep"):
+            assert tool not in argv, f"unscoped {tool} rule"
         # no access granted to directories outside the workspace
         add_dir = arg_after(argv, "--add-dir")
         if add_dir:
             assert os.path.realpath(add_dir).startswith(os.path.realpath(workdir))
+
+    def test_bash_runs_in_os_sandbox(self, fakecli, workdir):
+        """K4: Claude Code's file-tool limits don't cover Bash. Its OS sandbox does, so it
+        must be on whenever Bash is allowed, with no unsandboxed escape hatch."""
+        fakecli.configure("claude_ok.jsonl")
+        run(claude(fakecli), workdir)
+        settings = json.loads(arg_after(fakecli.record()["argv"], "--settings"))
+        assert settings["sandbox"]["enabled"] is True
+        assert settings["sandbox"].get("allowUnsandboxedCommands") is False
 
     def test_streams_progress_events_for_tools_and_text(self, fakecli, workdir):
         fakecli.configure("claude_tools.jsonl")
@@ -269,6 +283,7 @@ class TestCodex:
         i = argv.index("resume")
         assert argv[1] == "exec" and argv[i + 1] == "0aaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee"
         assert "--json" in argv
+        assert "--skip-git-repo-check" in argv  # resume refuses untrusted dirs without it
         # `exec resume` has no -s flag: the sandbox must still be workspace-write via config
         configs = [argv[j + 1] for j, a in enumerate(argv) if a == "-c" and j + 1 < len(argv)]
         assert any(c.replace(" ", "") == 'sandbox_mode="workspace-write"' for c in configs)
