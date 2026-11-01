@@ -1,4 +1,4 @@
-# Research App: Requirements (v0.5, 2026-10-31)
+# Research App: Requirements (v0.6, 2026-10-31)
 
 ## Purpose
 
@@ -111,6 +111,21 @@ tabs, and an Overview of stats and tracks.
 | H13 | **Cards are collapsible.** A collapsed card shows the quoted passage (one line), the first question, the reply count and the status (answering, done, error). Expanded, it shows every turn and the reply box. New cards and the active card are expanded; others default to collapsed; your choice per card is remembered in the browser. | M |
 | H14 | **Resolve and reopen.** Resolving a thread removes its highlight and moves it to a collapsed "Resolved (n)" list at the end of the margin. Reopening restores it. Resolution is stored with the thread, so it survives reloads and devices. | M |
 | H15 | Threads whose passage was removed from the document ("orphaned", H6) are listed under the active cards with a note, not dropped. | M |
+
+### Comment intents and collapsing (v0.6)
+
+Every question in a comment thread, the first one and each follow-up, has an **intent**.
+
+| ID | Requirement | Pri |
+|---|---|---|
+| I1 | Intents: **explain** (default), **update** (edit the document) and **task** (start a piece of work). The comment composer has three buttons, Explain · Update doc · Task, each with the backend picker. The intent is stored on the user turn and shown on the answer. | M |
+| I2 | **Explain** behaves as before: an answer that can create assets but never changes `doc.md`. | M |
+| I3 | **Update** runs as kind `edit` and may change `doc.md`, guided by the passage, the thread so far and the question. The answer turn records `doc_diff` (a unified diff of `doc.md`), and the run is committed to the topic's git. "No change" is recorded explicitly. | M |
+| I4 | **Undo** for an update turn restores `doc.md` to its version before that edit, if nothing has changed the document since (otherwise it refuses, 409, and says so). The turn is marked `undone`. Undo is recorded as its own commit. | M |
+| I5 | **Task** runs as kind `task` and may change anything in the workspace. It appears on the Overview as a track titled with the question and linked to the thread (`thread_id`). The thread's answer turn carries `task_run_id` and shows the task's status. | M |
+| I6 | Update and task resume the thread's CLI session when the backend matches, so they know the discussion. Otherwise they get the thread as text, as follow-ups do (K3). | M |
+| I7 | If an update or task removes or rewrites the highlighted passage, the answer turn is marked `passage_changed`, and the card says so instead of silently becoming an orphan. | M |
+| C1 | Every comment card has a visible chevron to collapse and expand it. The comment margin has **Collapse all** and **Hide comments**. Hidden comments leave the document full width, with a small "Show comments (n)" button. Both choices are remembered in the browser. | M |
 
 ### General questions
 

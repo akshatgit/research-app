@@ -294,6 +294,44 @@ Contracts:
   turn.cost_usd)` from `web/lib/usage.mjs` in small muted text. In the Runs view, show it
   per run.
 
+## v0.6: comment intents (explain, update, task) and collapsible comments
+
+New tests: `tests/test_intents.py` (its docstring is the contract). Requirements: I1–I7 and C1.
+
+- `Service.ask(..., intent="explain")`, `Service.follow_up(..., intent="explain")` and
+  `Service.undo_edit(topic_id, thread_id, turn_number)`. Intents are `explain`, `update`
+  and `task`; anything else raises `ValueError`. Run kinds are `answer` (explain), `edit`
+  (update) and `task`.
+- Only `answer` runs restore `doc.md`. `edit` and `task` runs may change it. For every
+  run, record `doc_diff` (a `difflib.unified_diff` of `doc.md` before and after; `""` if
+  unchanged) on the run and on the answer turn, along with `undone` (update turns) and
+  `passage_changed`: true when the thread's quote, compared with whitespace collapsed, is no
+  longer in `doc.md`.
+- Undo restores the "before" `doc.md` only if the current `doc.md` equals the "after" text
+  of that edit. Otherwise raise `RuntimeError` (409 over HTTP). Keep the before and after
+  text on disk with the turn (for example `NNN-<backend>.doc-before.md` and
+  `.doc-after.md`). Commit the undo to the topic's git.
+- Prompts: one function per intent, with the same cache-friendly order (stable parts first).
+  `explain` says "Do not edit doc.md". `update` says the backend may edit doc.md, should keep
+  other sections and citations intact, and names the passage. `task` describes a larger
+  piece of work that may touch the whole workspace and `tracker.json`. When resuming a
+  session, send a short intent-specific message that includes the passage, not the whole
+  document again.
+- Task runs are tracks: `build_overview` titles a task track with the question, adds
+  `thread_id`, and keeps it with the other run tracks.
+- HTTP: `intent` on `POST /threads` and `POST /threads/{tid}/turns` (400 if invalid).
+  `POST /api/topics/{id}/threads/{tid}/turns/{n}/undo` returns 200 with the thread, 400 if
+  it isn't an undoable update turn, 404 if there's no such turn, 409 on a conflict.
+- UI: the draft and reply composers get three buttons (**Explain**, **Update doc**,
+  **Task**) next to the backend picker. Answer turns show their intent as a small label.
+  Update turns show "Updated the document" with the diff in a collapsed `<details>` and an
+  **Undo** button (disabled once undone). Task turns show the task's status pill and an
+  "Open track" link to the Overview. Passage-changed turns say "The highlighted passage was
+  changed by this edit."
+- C1: a visible chevron button on every card toggles collapse. The margin header has
+  **Collapse all** and **Hide comments**. When hidden, the document goes full width and a
+  small "Show comments (n)" button appears. Both are remembered in localStorage.
+
 ## Definition of done
 
 - `make test` passes: every Python test (except the opt-in live ones) and every JS test.
