@@ -18,7 +18,7 @@ Keep tracker.json current in the workspace. Its schema is {{"tabs": "single", "s
 
 def answer_prompt(thread, question, doc, history=''):
     passage = thread['prefix'] + thread['quote'] + thread['suffix']
-    return f'''Give a concise answer. Name sources or files you rely on, and separate verified facts from explanation. You may create assets, but do not edit doc.md; adding an answer to the document requires an explicit research instruction.
+    return f'''Give a concise answer. Start with TL;DR: followed by one or two sentences. Name sources or files you rely on, and separate verified facts from explanation. You may create assets, but do not edit doc.md; adding an answer to the document requires an explicit research instruction.
 
 ## Current doc.md
 {doc}
@@ -31,7 +31,7 @@ Question: {question}'''
 
 
 def update_prompt(thread, question, doc, history=''):
-    return f'''You may edit doc.md to answer this update request. Keep other sections and citations intact. Explain what changed, or say if no change was needed.
+    return f'''You may edit doc.md to answer this update request. Start with TL;DR: followed by one or two sentences. Keep other sections and citations intact. Explain what changed, or say if no change was needed.
 
 ## Current doc.md
 {doc}
@@ -44,7 +44,7 @@ Question: {question}'''
 
 
 def task_prompt(thread, question, doc, history=''):
-    return f'''Complete this task in the topic workspace. You may edit doc.md, assets, and tracker.json. Keep tracker.json current and report the work and sources used.
+    return f'''Complete this task in the topic workspace. Start with TL;DR: followed by one or two sentences. You may edit doc.md, assets, and tracker.json. Keep tracker.json current and report the work and sources used.
 
 ## Current doc.md
 {doc}
@@ -61,5 +61,19 @@ def resumed_prompt(intent, thread, question):
         'explain': 'Give a concise answer. Do not edit doc.md.',
         'update': 'You may edit doc.md. Keep other sections and citations intact.',
         'task': 'Complete this task in the workspace; you may edit doc.md and tracker.json.',
+        'auto': 'Choose from explain, update, task using this comment and the thread. Begin with INTENT: explain|update|task and then TL;DR: one or two sentences. For explain, do not edit doc.md.',
     }
-    return f"{rules[intent]}\nPassage: {thread['quote']}\nQuestion: {question}"
+    return f"{rules[intent]}\nStart with TL;DR: one or two sentences.\nPassage: {thread['quote']}\nQuestion: {question}"
+
+
+def auto_prompt(thread, question, doc, history=''):
+    return f'''Read the comment and thread, then choose the appropriate intent: explain for an answer, update for a focused document edit, or task for larger workspace work. State your choice on the first line as INTENT: explain|update|task. On the second line write TL;DR: followed by one or two sentences. For explain, do not edit doc.md. Only update or task may change the document. Name sources or files used, and separate verified facts from explanation.
+
+## Current doc.md
+{doc}
+
+Passage: {thread['quote']}
+Surrounding text: {thread['prefix']}{thread['quote']}{thread['suffix']}
+Earlier turns:
+{history}
+Question: {question}'''

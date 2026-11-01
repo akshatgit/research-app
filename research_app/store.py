@@ -28,14 +28,15 @@ class Store:
     def _write_json(self, path, data):
         atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
 
-    def create_topic(self, title, focus='', backend='claude'):
+    def create_topic(self, title, focus='', backend='claude', title_source='user'):
         if not isinstance(title, str) or not title.strip() or backend not in ('claude', 'codex'):
             raise ValueError('invalid topic')
         topic_id = uuid.uuid4().hex
         d = self.root / 'topics' / topic_id
         for sub in ('assets', 'threads', 'runs'):
             (d / sub).mkdir(parents=True)
-        topic = {'id': topic_id, 'title': title.strip(), 'focus': focus, 'backend': backend, 'created': time.time()}
+        topic = {'id': topic_id, 'title': title.strip(), 'focus': focus, 'backend': backend,
+                 'title_source': title_source, 'created': time.time()}
         self._write_json(d / 'topic.json', topic)
         atomic_write_text(d / 'doc.md', f'# {title.strip()}\n')
         subprocess.run(['git', 'init', '-q', str(d)], capture_output=True)
@@ -43,6 +44,14 @@ class Store:
 
     def get_topic(self, topic_id):
         return json.loads((self.topic_dir(topic_id) / 'topic.json').read_text())
+
+    def update_topic_title(self, topic_id, title, source='doc'):
+        with self.lock:
+            topic = self.get_topic(topic_id)
+            if topic.get('title_source', 'user') != 'user':
+                topic.update(title=title, title_source=source)
+                self._write_json(self.topic_dir(topic_id) / 'topic.json', topic)
+            return topic
 
     def list_topics(self):
         topics = []
@@ -136,6 +145,10 @@ class Store:
 
     def get_thread(self, topic_id, thread_id):
         th = json.loads(self._thread_path(topic_id, thread_id).read_text())
+        from .answers import parse_answer
+        for turn in th.get('turns', []):
+            if turn.get('role') == 'assistant' and 'tldr' not in turn:
+                turn['tldr'] = parse_answer(turn.get('text', ''))['tldr']
         th.setdefault('sessions', {})
         th.setdefault('resolved', False)
         th.setdefault('resolved_at', None)

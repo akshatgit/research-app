@@ -14,6 +14,7 @@ const api = async (path, method = 'GET', body) => {
 const url = suffix => `/api/topics/${encodeURIComponent(topicId)}${suffix}`;
 const toast = message => {$('#toast').textContent = message; setTimeout(() => {if ($('#toast').textContent === message) $('#toast').textContent = ''}, 5000)};
 let topicId = null, tab = 'overview', overview = null, docVersion = 0, docMarkdown = '', threads = [], selected = null, activeId = null, draft = false, lastRefresh = 0, lastPoll = 0, activeRuns = false;
+let openThreadId = null;
 const expanded = new Set(JSON.parse(localStorage.getItem('expanded-comments') || '[]'));
 const saveExpanded = () => localStorage.setItem('expanded-comments', JSON.stringify([...expanded]));
 let commentsHidden = localStorage.getItem('comments-hidden') === 'true';
@@ -99,7 +100,7 @@ function textOffset(root, node, offset) {const range = document.createRange(); r
 function highlight(root, start, end, id) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); let node, at = 0, pieces = [];
   while ((node = walker.nextNode())) {const next = at + node.length; if (next > start && at < end) pieces.push([node, Math.max(0, start - at), Math.min(node.length, end - at)]); at = next}
-  for (const [target, a, b] of pieces.reverse()) {const range = document.createRange(); range.setStart(target, a); range.setEnd(target, b); const mark = element('mark'); mark.dataset.thread = id; range.surroundContents(mark); mark.onclick = () => (activeId === id && expanded.has(id)) ? collapse(id) : activate(id, false)}
+  for (const [target, a, b] of pieces.reverse()) {const range = document.createRange(); range.setStart(target, a); range.setEnd(target, b); const mark = element('mark'); mark.dataset.thread = id; range.surroundContents(mark); mark.onclick = () => openThread(id)}
 }
 // Clicking an open comment's highlight again closes it, like Google Docs.
 function collapse(id) {expanded.delete(id); saveExpanded(); if (activeId === id) activeId = null; renderComments()}
@@ -110,6 +111,7 @@ function activate(id, scrollHighlight = true) {
 }
 function renderComments() {
   if (commentsHidden) return;
+  if (localStorage.getItem('expanded-comments') === null) {for (const thread of threads) expanded.add(thread.id); saveExpanded()}
   const content = $('#content'), root = $('#thread-list'), orphans = $('#orphan-list'), resolved = $('#resolved-list'); root.replaceChildren(); orphans.replaceChildren(); resolved.replaceChildren();
   // Re-anchoring after a resize must start from plain rendered text, not nested marks.
   for (const mark of content.querySelectorAll('mark[data-thread]')) mark.replaceWith(...mark.childNodes);
@@ -138,46 +140,67 @@ function renderComments() {
   const closed = threads.filter(thread => thread.resolved && placement(thread) !== 'elsewhere');
   if (closed.length) {const details = element('details'); details.append(element('summary', '', `Resolved (${closed.length})`)); for (const thread of closed) details.append(makeCard(thread, false, true)); resolved.append(details)}
 }
+// TL;DRs are Markdown too (bold, code, citations): render them inline with the same safe
+// renderer as answers, so `**x**` and backticks don't show up raw.
+function inline(md, tag = 'span', cls = '') {const node = element(tag, cls); node.innerHTML = render(md || '', {topicId}).replace(/^<p>|<\/p>\s*$/g, ''); return node}
 function makeCard(thread, orphaned = false, resolved = false) {
   const state = summarize(thread), card = element('article', `comment-card${activeId === thread.id ? ' active' : ''}`); card.id = `thread-${thread.id}`;
   if (!resolved && !orphaned) card.classList.add('positioned');
-  const heading = element('div', 'comment-heading'), chevron = element('button', 'comment-chevron', expanded.has(thread.id) && !resolved ? '⌄' : '›'); chevron.type = 'button'; chevron.setAttribute('aria-label', expanded.has(thread.id) ? 'Collapse comment' : 'Expand comment');
-  const toggle = () => {activeId = thread.id; if (expanded.has(thread.id)) expanded.delete(thread.id); else expanded.add(thread.id); saveExpanded(); renderComments(); if (!orphaned && !resolved) $('#content').querySelector(`mark[data-thread="${CSS.escape(thread.id)}"]`)?.scrollIntoView({behavior:'smooth',block:'center'})};
-  chevron.onclick = toggle;
-  const passageChanged = thread.turns.some(turn => turn.passage_changed);
-  const head = element('button', 'comment-summary'); head.type = 'button'; head.append(element('strong', '', state.quote), element('span', '', state.question), element('small', '', `${state.replies} ${state.replies === 1 ? 'reply' : 'replies'} · ${state.status}${orphaned ? (passageChanged ? ' · passage changed' : ' · orphaned') : ''}`));
-  head.onclick = toggle; heading.append(chevron, head); card.append(heading);
-  if (!expanded.has(thread.id) || resolved) {if (resolved) addResolveButton(card, thread, false); return card}
-  for (const [index, turn] of thread.turns.entries()) {const div = element('div', 'turn'); div.append(element('small', '', `${turn.role} · ${turn.backend || ''}${turn.model ? ' · ' + turn.model : ''}${turn.status ? ' · ' + turn.status : ''}${turn.role === 'assistant' ? ' · ' + (turn.intent || 'explain') : ''}`)); const body = element('div'); body.innerHTML = render(turn.text || turn.error || '', {topicId}); div.append(body); if (turn.role === 'assistant') {
-    if (turn.intent === 'update') {div.append(element('small', 'muted', turn.doc_diff ? 'Updated the document' : 'No change')); if (turn.doc_diff) {const details = element('details'); details.append(element('summary', '', 'Document diff'), element('pre', 'doc-diff', turn.doc_diff)); div.append(details)} const undo = element('button', '', turn.undone ? 'Undone' : 'Undo'); undo.disabled = turn.undone || turn.status !== 'done' || !turn.doc_diff; undo.onclick = async () => {try {await api(url(`/threads/${thread.id}/turns/${index + 1}/undo`), 'POST', {}); await reloadTopic()} catch(error) {toast(error.message)}}; div.append(undo)}
-    if (turn.intent === 'task') {const taskStatus = turn.status || 'queued'; div.append(element('span', `pill ${{queued:'pending', error:'failed', cancelled:'failed'}[taskStatus] || taskStatus}`, taskStatus)); const open = element('button', 'open-track', 'Open track'); open.onclick = () => {navigate(topicId, 'overview'); setTimeout(() => document.querySelector(`[data-track="run-${CSS.escape(turn.task_run_id)}"]`)?.scrollIntoView({behavior:'smooth', block:'center'}), 150)}; div.append(open)}
-    if (turn.passage_changed && ['update', 'task'].includes(turn.intent)) div.append(element('p', 'passage-changed', 'The highlighted passage was changed by this edit.'));
-    const usage = formatUsage(turn.usage, turn.cost_usd); if (usage) div.append(element('small', 'muted', usage))} card.append(div)}
-  const form = intentComposer(thread.turns.at(-1)?.backend || overview.topic.backend, 'Reply', async (question, backend, intent) => {await api(url(`/threads/${thread.id}/turns`), 'POST', {question, backend, intent}); await refreshThreads()}); card.append(form);
-  addResolveButton(card, thread, true);
-  if (state.status === 'error') {const retry = element('button', '', 'Retry'); retry.onclick = async () => {try {await api(url(`/threads/${thread.id}/retry`), 'POST', {}); await refreshThreads()} catch(error) {toast(error.message)}}; card.append(retry)}
-  const del = element('button', 'danger', 'Delete'); del.onclick = async () => {if (!confirm('Delete this thread?')) return; await api(url(`/threads/${thread.id}`), 'DELETE'); await refreshThreads()}; card.append(del);
-  // A dedicated Collapse button at the end of an open card: the chevron is out of view in long threads.
-  const close = element('button', 'comment-collapse', 'Collapse'); close.type = 'button'; close.onclick = () => collapse(thread.id); card.append(close);
+  const heading = element('div', 'comment-heading'), chevron = element('button', 'comment-chevron', expanded.has(thread.id) ? '⌄' : '›');
+  chevron.type = 'button'; chevron.setAttribute('aria-label', expanded.has(thread.id) ? 'Collapse comment' : 'Expand comment');
+  chevron.onclick = () => {activeId = thread.id; if (expanded.has(thread.id)) expanded.delete(thread.id); else expanded.add(thread.id); saveExpanded(); renderComments()};
+  const head = element('button', 'comment-summary'); head.type = 'button'; head.append(element('strong', '', state.quote), element('span', '', state.question)); head.onclick = () => openThread(thread.id);
+  heading.append(chevron, head); card.append(heading);
+  if (expanded.has(thread.id)) {
+    const pairs = []; for (let i = 1; i < thread.turns.length - 1; i += 2) if (thread.turns[i]?.role === 'assistant') pairs.push([thread.turns[i - 1], thread.turns[i]]);
+    for (const [question, answer] of pairs.slice(1, -1)) {const line = element('div', 'exchange-line', `${question.text} → `); line.append(inline(answer.tldr || answer.text || '…')); card.append(line)}
+    const latest = [...thread.turns].reverse().find(turn => turn.role === 'assistant');
+    if (latest) {const box = element('div', 'card-tldr'); box.append(element('small', 'intent-label', latest.intent || 'explain'), inline(latest.tldr || latest.text || latest.status || 'Waiting for answer…', 'p')); card.append(box)}
+    const read = element('button', 'read-answer', 'Read full answer'); read.onclick = () => openThread(thread.id); card.append(read);
+  }
+  const count = thread.turns.filter(turn => turn.role === 'assistant').length;
+  card.append(element('small', 'card-status', `${count} ${count === 1 ? 'answer' : 'answers'} · ${state.status}${orphaned ? ' · orphaned' : ''}`));
   return card;
 }
-function addResolveButton(card, thread, value) {const button = element('button', '', value ? 'Resolve' : 'Reopen'); button.onclick = async () => {try {await api(url(`/threads/${thread.id}/resolve`), 'POST', {resolved: value}); await refreshThreads()} catch(error) {toast(error.message)}}; card.append(button)}
+function closeThread() {openThreadId = null; $('#thread-dialog').close()}
+function openThread(id) {openThreadId = id; activeId = id; renderDialog(); if (!$('#thread-dialog').open) $('#thread-dialog').showModal()}
+function renderDialog() {
+  const thread = threads.find(item => item.id === openThreadId); if (!thread) {if ($('#thread-dialog').open) closeThread(); return}
+  const body = $('#dialog-body'), footer = $('#dialog-footer'), oldScroll = body.scrollTop, typed = footer.querySelector('textarea')?.value, oldIntent = footer.querySelector('select[name="intent"]')?.value, oldBackend = footer.querySelector('select[name="backend"]')?.value;
+  $('#dialog-quote').textContent = thread.quote; body.replaceChildren(); footer.replaceChildren();
+  thread.turns.forEach((turn, index) => {
+    const item = element('div', turn.role === 'user' ? 'dialog-user' : 'dialog-answer');
+    if (turn.role === 'user') {item.append(element('small', '', `You · ${turn.intent || 'auto'}`), element('p', '', turn.text)); body.append(item); return}
+    item.append(element('small', 'answer-meta', `${turn.backend || ''}${turn.model ? ' · ' + turn.model : ''} · ${turn.intent || 'explain'}`));
+    if (turn.tldr) {const summary = element('div', 'answer-tldr'); summary.append(element('strong', '', 'TL;DR '), inline(turn.tldr)); item.append(summary)}
+    const content = element('div', 'answer-body'); content.innerHTML = render(turn.text || turn.error || '', {topicId}); item.append(content);
+    if (turn.intent === 'update') {item.append(element('small', 'muted', turn.doc_diff ? 'Updated the document' : 'No change')); if (turn.doc_diff) {const details = element('details'); details.append(element('summary', '', 'Document diff'), element('pre', 'doc-diff', turn.doc_diff)); item.append(details)} const undo = element('button', '', turn.undone ? 'Undone' : 'Undo'); undo.disabled = turn.undone || turn.status !== 'done' || !turn.doc_diff; undo.onclick = async () => {try {await api(url(`/threads/${thread.id}/turns/${index + 1}/undo`), 'POST', {}); await reloadTopic(); renderDialog()} catch(error) {toast(error.message)}}; item.append(undo)}
+    if (turn.intent === 'task') {item.append(element('span', `pill ${{queued:'pending', error:'failed', cancelled:'failed'}[turn.status] || turn.status || 'pending'}`, turn.status || 'queued')); const open = element('button', 'open-track', 'Open track'); open.onclick = () => {closeThread(); navigate(topicId, 'overview'); setTimeout(() => document.querySelector(`[data-track="run-${CSS.escape(turn.task_run_id)}"]`)?.scrollIntoView({behavior:'smooth', block:'center'}), 150)}; item.append(open)}
+    if (turn.passage_changed && ['update', 'task'].includes(turn.intent)) item.append(element('p', 'passage-changed', 'The highlighted passage was changed by this edit.'));
+    const usage = formatUsage(turn.usage, turn.cost_usd); if (usage) item.append(element('small', 'muted', usage)); body.append(item);
+  });
+  const form = intentComposer(thread.turns.at(-1)?.backend || overview.topic.backend, 'Reply', async (question, backend, intent) => {await api(url(`/threads/${thread.id}/turns`), 'POST', {question, backend, intent}); await refreshThreads()}); form.classList.add('dialog-composer'); footer.append(form);
+  if (typed) form.querySelector('textarea').value = typed; if (oldIntent) form.querySelector('select[name="intent"]').value = oldIntent; if (oldBackend) form.querySelector('select[name="backend"]').value = oldBackend;
+  const actions = element('div', 'dialog-actions'), resolve = element('button', '', thread.resolved ? 'Reopen' : 'Resolve'); resolve.onclick = async () => {await api(url(`/threads/${thread.id}/resolve`), 'POST', {resolved: !thread.resolved}); await refreshThreads()}; actions.append(resolve);
+  if (thread.turns.at(-1)?.status === 'error') {const retry = element('button', '', 'Retry'); retry.onclick = async () => {await api(url(`/threads/${thread.id}/retry`), 'POST', {}); await refreshThreads()}; actions.append(retry)}
+  const del = element('button', 'danger', 'Delete'); del.onclick = async () => {if (!confirm('Delete this thread?')) return; await api(url(`/threads/${thread.id}`), 'DELETE'); closeThread(); await refreshThreads()}; actions.append(del); footer.append(actions); body.scrollTop = oldScroll;
+}
 function backendSelect(value) {const select = element('select'); for (const name of ['claude', 'codex']) {const option = element('option', '', name); option.value = name; select.append(option)} select.value = value; return select}
 function intentComposer(defaultBackend, placeholder, send) {
-  const form = element('form', 'intent-form'), question = element('textarea'), backend = backendSelect(defaultBackend), actions = element('div', 'intent-actions');
+  const form = element('form', 'intent-form'), question = element('textarea'), backend = backendSelect(defaultBackend), actions = element('div', 'intent-actions'), intent = element('select');
   question.required = true; question.placeholder = placeholder;
-  for (const [intent, label] of [['explain', 'Explain'], ['update', 'Update doc'], ['task', 'Task']]) {
-    const button = element('button', '', label); button.type = 'submit'; button.value = intent; actions.append(button);
-  }
-  form.append(question, backend, actions);
-  form.onsubmit = async event => {event.preventDefault(); const intent = event.submitter?.value || 'explain'; try {await send(question.value, backend.value, intent)} catch(error) {toast(error.message)}};
+  intent.name = 'intent'; backend.name = 'backend';
+  for (const [value, label] of [['auto', 'Auto'], ['explain', 'Explain'], ['update', 'Update doc'], ['task', 'Task']]) {const option = element('option', '', label); option.value = value; intent.append(option)}
+  const button = element('button', '', 'Send'); button.type = 'submit'; actions.append(intent, backend, button);
+  form.append(question, actions);
+  form.onsubmit = async event => {event.preventDefault(); const message = question.value; question.value = ''; try {await send(message, backend.value, intent.value)} catch(error) {question.value = message; toast(error.message)}};
   return form;
 }
 async function reloadTopic() {const data = await api(url('')); docVersion = data.doc_version; docMarkdown = data.doc; overview = await api(url('/overview')); threads = await api(url('/threads')); renderTabs(); await showView()}
-async function refreshThreads() {threads = await api(url('/threads')); if (tab === 'document' || overview.sections.some(section => section.id === tab)) {$('#content').innerHTML = render(tab === 'document' ? docMarkdown : overview.sections.find(section => section.id === tab).markdown, {topicId}); await renderCharts($('#content')); await renderMermaid($('#content')); renderComments()}}
+async function refreshThreads() {threads = await api(url('/threads')); if (tab === 'document' || overview.sections.some(section => section.id === tab)) {$('#content').innerHTML = render(tab === 'document' ? docMarkdown : overview.sections.find(section => section.id === tab).markdown, {topicId}); await renderCharts($('#content')); await renderMermaid($('#content')); renderComments()} if (openThreadId) renderDialog()}
 function draftCard() {
   draft = true; const slot = $('#draft-slot'); slot.replaceChildren(); const card = element('div', 'comment-card draft'); card.append(element('small', '', selected.quote));
-  const form = intentComposer(overview.topic.backend, 'What does this mean?', async (question, backend, intent) => {const thread = await api(url('/threads'), 'POST', {...selected, section_id: tab === 'document' ? null : tab, question, backend, intent}); expanded.add(thread.id); activeId = thread.id; saveExpanded(); draft = false; slot.replaceChildren(); await refreshThreads()});
+  const form = intentComposer(overview.topic.backend, 'What does this mean?', async (question, backend, intent) => {const thread = await api(url('/threads'), 'POST', {...selected, section_id: tab === 'document' ? null : tab, question, backend, intent}); expanded.add(thread.id); activeId = thread.id; saveExpanded(); draft = false; slot.replaceChildren(); await refreshThreads(); openThread(thread.id)});
   const cancel = element('button', '', 'Cancel'); cancel.type = 'button'; cancel.onclick = () => {draft = false; slot.replaceChildren()}; card.append(form, cancel);
   slot.append(card); slot.style.top = $('#comment-button').style.top; $('#comment-button').hidden = true; form.querySelector('textarea').focus();
 }
@@ -209,7 +232,10 @@ function drawSVG(chart, data, spec) {
 }
 async function renderMermaid(root) {if (!root.querySelector('.mermaid')) return; try {const mermaid = (await import('https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs')).default; mermaid.initialize({startOnLoad: false, securityLevel: 'strict'}); await mermaid.run({nodes: root.querySelectorAll('.mermaid')})} catch(error) {toast(`Diagram unavailable: ${error.message}`)}}
 
-$('#new-topic').onsubmit = async event => {event.preventDefault(); const form = event.currentTarget; try {const topic = await api('/api/topics', 'POST', {title: form.elements.title.value, focus: form.elements.focus.value, backend: form.elements.backend.value}); form.reset(); await refreshTopics(); navigate(topic.id)} catch(error) {toast(error.message)}};
+$('#new-topic').onsubmit = async event => {event.preventDefault(); const form = event.currentTarget; try {const topic = await api('/api/topics', 'POST', {title: form.elements.title.value, statement: form.elements.statement.value, backend: form.elements.backend.value}); form.reset(); await refreshTopics(); navigate(topic.id)} catch(error) {toast(error.message)}};
+$('#dialog-close').onclick = closeThread;
+$('#thread-dialog').addEventListener('click', event => {if (event.target === $('#thread-dialog')) closeThread()});
+$('#thread-dialog').addEventListener('close', () => {openThreadId = null});
 $('#instruct-form').onsubmit = async event => {event.preventDefault(); const form = event.currentTarget; try {await api(url('/instruct'), 'POST', {instruction: form.elements.instruction.value, backend: form.elements.backend.value}); form.elements.instruction.value = ''; await showRuns(); overview = await api(url('/overview')); await showView()} catch(error) {toast(error.message)}};
 $('#back-to-topics').onclick = () => {leaveTopic(); refreshTopics().catch(error => toast(error.message))};
 $('#content').addEventListener('mouseup', () => {if (!(tab === 'document' || overview?.sections.some(section => section.id === tab))) return; const selection = window.getSelection(), root = $('#content'); if (!selection || selection.isCollapsed || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return; const text = root.textContent, start = textOffset(root, selection.anchorNode, selection.anchorOffset), end = textOffset(root, selection.focusNode, selection.focusOffset); selected = capture(text, Math.min(start, end), Math.max(start, end)); if (!selected.quote.trim()) return; const rect = selection.getRangeAt(0).getBoundingClientRect(), container = root.getBoundingClientRect(); const button = $('#comment-button'); button.style.top = `${Math.max(0, rect.top - container.top)}px`; button.hidden = false});
@@ -220,5 +246,5 @@ $('#show-comments').onclick = () => {commentsHidden = false; localStorage.setIte
 document.addEventListener('click', event => {const citation = event.target.closest('a[href^="#src-"]'); if (!citation || !overview) return; const target = citationTarget(citation.getAttribute('href').slice(5), overview.tabs); if (target) {event.preventDefault(); navigate(topicId, target.tab); setTimeout(() => document.getElementById(target.anchor)?.scrollIntoView({behavior: 'smooth'}), 100)}});
 addEventListener('popstate', () => route().catch(error => toast(error.message)));
 addEventListener('resize', () => {if (topicId && (tab === 'document' || overview?.sections.some(section => section.id === tab))) renderComments()});
-async function poll() {if (topicId && (activeRuns || Date.now() - lastPoll >= 10000)) try {lastPoll = Date.now(); const version = await api(url('/version')); if (version.doc_version !== docVersion || version.active_runs || activeRuns) {const data = await api(url('')); docVersion = data.doc_version; docMarkdown = data.doc; overview = await api(url('/overview')); threads = await api(url('/threads')); renderTabs(); await showView()} await showRuns()} catch(error) {toast(error.message)} setTimeout(poll, 2000)}
+async function poll() {if (topicId && (activeRuns || Date.now() - lastPoll >= 10000)) try {lastPoll = Date.now(); const version = await api(url('/version')); if (version.doc_version !== docVersion || version.active_runs || activeRuns) {const data = await api(url('')); docVersion = data.doc_version; docMarkdown = data.doc; overview = await api(url('/overview')); threads = await api(url('/threads')); renderTabs(); await showView(); if (openThreadId) renderDialog()} await showRuns()} catch(error) {toast(error.message)} setTimeout(poll, 2000)}
 setFocus(false); refreshTopics().then(() => route()).catch(error => toast(error.message)); setTimeout(poll, 2000);

@@ -97,7 +97,7 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765, allowed
                     if self.command == 'POST':
                         body = self._body()
                         if body is not None:
-                            return self._send(201, service.create_topic(body.get('title'), body.get('focus', ''), body.get('backend', 'claude'), body.get('research', True)))
+                            return self._send(201, service.create_topic(body.get('title'), body.get('focus', ''), body.get('backend', 'claude'), body.get('research', True), body.get('statement')))
                 if len(parts) >= 3 and parts[:2] == ['api', 'runs']:
                     rid = parts[2]
                     if len(parts) == 3 and self.command == 'GET':
@@ -147,7 +147,7 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765, allowed
                         if self.command == 'POST':
                             body = self._body()
                             if body is not None:
-                                return self._send(201, service.ask(tid, body.get('quote', ''), body.get('prefix', ''), body.get('suffix', ''), body.get('start', 0), body.get('question', ''), body.get('backend'), body.get('section_id'), body.get('intent', 'explain')))
+                                return self._send(201, service.ask(tid, body.get('quote', ''), body.get('prefix', ''), body.get('suffix', ''), body.get('start', 0), body.get('question', ''), body.get('backend'), body.get('section_id'), body.get('intent', 'auto')))
                     if len(tail) >= 2 and tail[0] == 'threads':
                         thread_id = tail[1]
                         if len(tail) == 2 and self.command == 'DELETE':
@@ -158,7 +158,7 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765, allowed
                             if body is None:
                                 return
                             if tail[2] == 'turns':
-                                return self._send(202, service.follow_up(tid, thread_id, body.get('question', ''), body.get('backend'), body.get('intent', 'explain')))
+                                return self._send(202, service.follow_up(tid, thread_id, body.get('question', ''), body.get('backend'), body.get('intent', 'auto')))
                             if tail[2] == 'retry':
                                 return self._send(202, service.retry(tid, thread_id))
                             if tail[2] == 'resolve':

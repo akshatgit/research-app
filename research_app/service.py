@@ -10,9 +10,10 @@ import uuid
 from .backends.base import RunRequest, normalize_usage
 from .fsutil import atomic_write_text
 from .fsutil import snapshot, diff_snapshots
-from .prompts import research_prompt, answer_prompt, update_prompt, task_prompt, resumed_prompt
+from .prompts import research_prompt, answer_prompt, update_prompt, task_prompt, auto_prompt, resumed_prompt
+from .answers import parse_answer
 
-INTENTS = {'explain': 'answer', 'update': 'edit', 'task': 'task'}
+INTENTS = {'auto': 'answer', 'explain': 'answer', 'update': 'edit', 'task': 'task'}
 
 
 class Service:
@@ -31,10 +32,17 @@ class Service:
             raise ValueError('unknown backend')
         return name
 
-    def create_topic(self, title, focus='', backend='claude', research=True):
+    def create_topic(self, title=None, focus='', backend='claude', research=True, statement=None):
         if backend not in self.backends:
             raise ValueError('unknown backend')
-        topic = self.store.create_topic(title, focus, backend)
+        source = 'user'
+        if not isinstance(title, str) or not title.strip():
+            if not isinstance(statement, str) or not statement.strip():
+                raise ValueError('title or statement required')
+            sentence = re.split(r'(?<=[.!?])\s+', statement.strip(), maxsplit=1)[0]
+            title = sentence if len(sentence) <= 60 else sentence[:59].rsplit(' ', 1)[0].rstrip(' ,;:-') + '…'
+            source = 'statement'
+        topic = self.store.create_topic(title, statement if statement is not None else focus, backend, title_source=source)
         if research:
             self.instruct(topic['id'], 'Create a researched brief with at least five cited sources.')
         return topic
@@ -48,7 +56,7 @@ class Service:
         prompt = research_prompt(topic, instruction, self.store.read_doc(topic_id))
         return self._enqueue(topic_id, 'research', name, prompt, instruction=instruction)
 
-    def ask(self, topic_id, quote, prefix, suffix, start, question, backend=None, section_id=None, intent='explain'):
+    def ask(self, topic_id, quote, prefix, suffix, start, question, backend=None, section_id=None, intent='auto'):
         if intent not in INTENTS:
             raise ValueError('unknown intent')
         name = self._backend(topic_id, backend)
@@ -56,7 +64,7 @@ class Service:
         self._answer(topic_id, th['id'], th['turns'][0]['text'], name, intent=intent)
         return th
 
-    def follow_up(self, topic_id, thread_id, question, backend=None, intent='explain'):
+    def follow_up(self, topic_id, thread_id, question, backend=None, intent='auto'):
         if intent not in INTENTS:
             raise ValueError('unknown intent')
         with self.lock:
@@ -80,16 +88,16 @@ class Service:
                 raise RuntimeError('nothing to retry')
             name = last['backend']
             question = th['turns'][-2]['text']
-            intent = last.get('intent', th['turns'][-2].get('intent', 'explain'))
+            intent = th['turns'][-2].get('intent', 'auto')
             self.store.replace_last_turn(topic_id, thread_id, {'role': 'assistant', 'text': '', 'backend': name, 'status': 'queued', 'intent': intent})
             self._answer(topic_id, thread_id, question, name, replace=True, intent=intent)
             return self.store.get_thread(topic_id, thread_id)
 
-    def _answer(self, topic_id, thread_id, question, name, replace=False, intent='explain'):
+    def _answer(self, topic_id, thread_id, question, name, replace=False, intent='auto'):
         th = self.store.get_thread(topic_id, thread_id)
         session = th.get('sessions', {}).get(name)
         history = '' if session else '\n'.join(f"{t['role']} ({t['backend']}): {t['text']}" for t in th['turns'][:-1])
-        builders = {'explain': answer_prompt, 'update': update_prompt, 'task': task_prompt}
+        builders = {'auto': auto_prompt, 'explain': answer_prompt, 'update': update_prompt, 'task': task_prompt}
         prompt = resumed_prompt(intent, th, question) if session else builders[intent](th, question, self.store.read_doc(topic_id), history)
         if not replace:
             self.store.append_turn(topic_id, thread_id, {'role': 'assistant', 'text': '', 'backend': name, 'status': 'queued', 'intent': intent})
@@ -148,9 +156,19 @@ class Service:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(source, target)
                     transcript = target.relative_to(d).as_posix()
+            parsed = parse_answer(result.text) if run.get('thread_id') else None
+            resolved_intent = (parsed['intent'] or 'explain') if run.get('intent') == 'auto' else run.get('intent')
+            if run.get('intent') == 'auto':
+                run['kind'] = INTENTS[resolved_intent]
+            doc_restored = False
             if run['kind'] == 'answer' and self.store.read_doc(topic_id) != old_doc:
                 self.store.write_doc(topic_id, old_doc)
+                doc_restored = True
             new_doc = self.store.read_doc(topic_id)
+            if run['kind'] == 'research':
+                match = re.search(r'^#\s+(.+?)\s*$', new_doc, re.M)
+                if match:
+                    self.store.update_topic_title(topic_id, match.group(1))
             doc_diff = ''.join(difflib.unified_diff(old_doc.splitlines(keepends=True),
                 new_doc.splitlines(keepends=True), fromfile='doc.md before', tofile='doc.md after'))
             changed = diff_snapshots(before, snapshot(d))
@@ -167,7 +185,7 @@ class Service:
                     cost = session_cost - max(earlier)
             with self.lock:
                 run.update(status='done' if result.ok else ('cancelled' if result.error_kind == 'cancelled' else 'error'),
-                           model=result.model, text=result.text, error_kind=result.error_kind, error=result.error,
+                           model=result.model, text=parsed['body'] if parsed else result.text, error_kind=result.error_kind, error=result.error,
                            command=result.command, exit_code=result.exit_code,
                            usage=normalize_usage(run['backend'], result.usage), transcript=transcript,
                            cost_usd=cost, session_cost_usd=session_cost, duration_s=result.duration_s,
@@ -176,11 +194,12 @@ class Service:
                 if run.get('thread_id'):
                     th = self.store.get_thread(topic_id, run['thread_id'])
                     passage_changed = bool(th['quote'].strip()) and re.sub(r'\s+', ' ', th['quote']).strip() not in re.sub(r'\s+', ' ', new_doc)
-                    self.store.update_last_turn(topic_id, run['thread_id'], text=result.text,
+                    self.store.update_last_turn(topic_id, run['thread_id'], text=parsed['body'], tldr=parsed['tldr'],
                         status=run['status'], backend=run['backend'], model=result.model,
                         session_id=result.session_id, run_id=run_id, files_changed=changed,
                         error_kind=result.error_kind, error=result.error, usage=run['usage'],
-                        cost_usd=cost, session_cost_usd=session_cost, intent=run['intent'],
+                        cost_usd=cost, session_cost_usd=session_cost, intent=resolved_intent,
+                        intent_source='auto' if run['intent'] == 'auto' else 'user', doc_restored=doc_restored,
                         doc_diff=doc_diff, passage_changed=passage_changed,
                         **({'undone': False} if run['kind'] == 'edit' else {}),
                         **({'task_run_id': run_id} if run['kind'] == 'task' else {}))
