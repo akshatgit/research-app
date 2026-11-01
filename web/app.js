@@ -184,8 +184,7 @@ function renderDialog() {
   const form = intentComposer(thread.turns.at(-1)?.backend || overview.topic.backend, 'Reply', async (question, backend, intent) => {await api(url(`/threads/${thread.id}/turns`), 'POST', {question, backend, intent}); await refreshThreads()}); form.classList.add('dialog-composer'); footer.append(form);
   if (typed) form.querySelector('textarea').value = typed; if (oldIntent) form.querySelector('select[name="intent"]').value = oldIntent; if (oldBackend) form.querySelector('select[name="backend"]').value = oldBackend;
   const actions = element('div', 'dialog-actions'), resolve = element('button', '', thread.resolved ? 'Reopen' : 'Resolve'); resolve.onclick = async () => {await api(url(`/threads/${thread.id}/resolve`), 'POST', {resolved: !thread.resolved}); await refreshThreads()}; actions.append(resolve);
-  if (thread.turns.at(-1)?.status === 'error') {const retry = element('button', '', 'Retry'); retry.onclick = async () => {await api(url(`/threads/${thread.id}/retry`), 'POST', {}); await refreshThreads()}; actions.append(retry)}
-  const del = element('button', 'danger', 'Delete'); del.onclick = async () => {if (!confirm('Delete this thread?')) return; await api(url(`/threads/${thread.id}`), 'DELETE'); closeThread(); await refreshThreads()}; actions.append(del); footer.append(actions); body.scrollTop = oldScroll;
+  if (thread.turns.at(-1)?.status === 'error') {const retry = element('button', '', 'Retry'); retry.onclick = async () => {await api(url(`/threads/${thread.id}/retry`), 'POST', {}); await refreshThreads()}; actions.append(retry)} footer.append(actions); body.scrollTop = oldScroll;
 }
 function backendSelect(value) {const select = element('select'); for (const name of ['claude', 'codex']) {const option = element('option', '', name); option.value = name; select.append(option)} select.value = value; return select}
 function intentComposer(defaultBackend, placeholder, send) {
@@ -193,7 +192,9 @@ function intentComposer(defaultBackend, placeholder, send) {
   question.required = true; question.placeholder = placeholder;
   intent.name = 'intent'; backend.name = 'backend';
   for (const [value, label] of [['auto', 'Auto'], ['explain', 'Explain'], ['update', 'Update doc'], ['task', 'Task']]) {const option = element('option', '', label); option.value = value; intent.append(option)}
-  const button = element('button', '', 'Send'); button.type = 'submit'; actions.append(intent, backend, button);
+  // No Send button: Enter sends, Shift+Enter adds a line (like the Claude CLI). Skip while an IME is composing.
+  question.addEventListener('keydown', event => {if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {event.preventDefault(); if (question.value.trim()) form.requestSubmit()}});
+  actions.append(intent, backend, element('small', 'muted composer-hint', 'Enter to send · Shift+Enter for a new line'));
   form.append(question, actions);
   form.onsubmit = async event => {event.preventDefault(); const message = question.value; question.value = ''; try {await send(message, backend.value, intent.value)} catch(error) {question.value = message; toast(error.message)}};
   return form;
