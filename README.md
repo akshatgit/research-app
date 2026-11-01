@@ -84,3 +84,7 @@ make setup        # .venv with pytest
 make test         # Python + JS tests (fake CLIs, no quota used)
 make test-live    # real claude/codex CLIs; uses a little quota
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
