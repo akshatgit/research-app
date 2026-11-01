@@ -1,5 +1,5 @@
 """Codex CLI JSON event adapter."""
-from .base import Event, run_stream
+from .base import Event, _short, run_stream
 import os
 from pathlib import Path
 
@@ -44,9 +44,15 @@ class CodexCLI:
                     if callback:
                         callback(Event('text', result.text))
                 elif typ in ('web_search', 'command_execution', 'file_change') and callback:
-                    detail = item.get('query') or item.get('command') or ', '.join(
-                        str(c.get('path', '')) for c in item.get('changes', []))
-                    callback(Event('tool', f'{typ}: {detail}'))
+                    # Readable progress lines, matching the Claude backend's wording.
+                    if typ == 'web_search':
+                        label = f"Searching the web: {item.get('query', '')}"
+                    elif typ == 'command_execution':
+                        label = f"Running: {item.get('command', '')}"
+                    else:
+                        label = 'Editing ' + ', '.join(str(c.get('path', '')) for c in item.get('changes', []))
+                    if kind == 'item.started' or typ == 'file_change':
+                        callback(Event('tool', _short(label)))
             elif kind == 'turn.completed':
                 result.usage = obj.get('usage') or {}
             elif kind in ('error', 'turn.failed'):

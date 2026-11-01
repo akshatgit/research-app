@@ -159,9 +159,10 @@ class TestClaude:
         res, events = run(claude(fakecli), workdir)
         assert res.ok and res.text == "Done. Added a chart."
         assert all(isinstance(e, Event) for e in events)
+        # progress lines are readable, not raw tool calls
         tools = [e.text for e in events if e.kind == "tool"]
-        assert any("WebSearch" in t for t in tools)
-        assert any("Write" in t for t in tools)
+        assert "Searching the web: formal verification SRE" in tools
+        assert "Writing assets/data.csv" in tools
         assert any(e.kind == "text" and "Searching" in e.text for e in events)
         assert res.cost_usd == pytest.approx(0.42)
 
@@ -297,10 +298,10 @@ class TestCodex:
         fakecli.configure("codex_tools.jsonl")
         res, events = run(codex(fakecli), workdir)
         assert res.ok and res.text == "Done. Added a chart."
-        tools = " | ".join(e.text for e in events if e.kind == "tool")
-        assert "formal verification SRE" in tools          # web search query
-        assert "python3 make_chart.py" in tools            # command
-        assert "doc.md" in tools                           # file change
+        tools = [e.text for e in events if e.kind == "tool"]
+        assert "Searching the web: formal verification SRE" in tools
+        assert "Running: python3 make_chart.py" in tools
+        assert "Editing doc.md" in tools
 
     def test_failed_turn_is_auth_error(self, fakecli, workdir):
         fakecli.configure("codex_failed.jsonl", exit_code=1)
@@ -331,3 +332,27 @@ def test_timeout_holds_when_cli_never_reads_a_big_prompt(fakecli, workdir, cls, 
     t.join(15)
     assert not t.is_alive(), "run() blocked past its timeout"
     assert box["res"].error_kind == "timeout" and time.time() - t0 < 15
+
+
+@pytest.mark.parametrize("name,tool_input,label", [
+    ("WebSearch", {"query": "SLO burn rate"}, "Searching the web: SLO burn rate"),
+    ("WebFetch", {"url": "https://sre.google/workbook/"}, "Reading https://sre.google/workbook/"),
+    ("Read", {"file_path": "/ws/source/lean/Core.lean"}, "Reading source/lean/Core.lean"),
+    ("Write", {"file_path": "assets/a.csv", "content": "x"}, "Writing assets/a.csv"),
+    ("Edit", {"file_path": "/ws/doc.md", "old_string": "a", "new_string": "b"}, "Editing doc.md"),
+    ("Bash", {"command": "python3 plot.py --out assets/p.svg"}, "Running: python3 plot.py --out assets/p.svg"),
+    ("Grep", {"pattern": "first_fire"}, "Searching files for first_fire"),
+    ("Glob", {"pattern": "**/*.lean"}, "Finding files: **/*.lean"),
+    ("TodoWrite", {"todos": []}, "Using TodoWrite"),
+])
+def test_describe_tool(name, tool_input, label):
+    """Claude tool calls become readable progress lines; paths are shown relative to the
+    workspace when they are inside it."""
+    from research_app.backends.base import describe_tool
+    assert describe_tool(name, tool_input, workdir="/ws") == label
+
+
+def test_describe_tool_truncates_long_details():
+    from research_app.backends.base import describe_tool
+    label = describe_tool("Bash", {"command": "echo " + "x" * 500}, workdir="/ws")
+    assert len(label) <= 120 and label.endswith("…")

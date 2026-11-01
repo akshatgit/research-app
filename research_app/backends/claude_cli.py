@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-from .base import Event, run_stream
+from .base import Event, describe_tool, run_stream
 
 # Claude Code confines its file tools to the working directory, but Bash commands are not
 # covered by that. Its OS-level sandbox (macOS Seatbelt) is what stops `python3 -c ...`
@@ -50,7 +50,7 @@ class ClaudeCLI:
                     if item.get('type') == 'text' and callback:
                         callback(Event('text', item.get('text', '')))
                     elif item.get('type') == 'tool_use' and callback:
-                        callback(Event('tool', f"{item.get('name', '')}: {item.get('input', '')}"))
+                        callback(Event('tool', describe_tool(item.get('name', ''), item.get('input'), req.workdir)))
             elif kind == 'result':
                 result.text = obj.get('result', '')
                 result.session_id = obj.get('session_id') or result.session_id

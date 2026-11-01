@@ -166,6 +166,37 @@ function makeCard(thread, orphaned = false, resolved = false) {
 }
 function closeThread() {openThreadId = null; $('#thread-dialog').close()}
 function openThread(id) {openThreadId = id; activeId = id; renderDialog(); if (!$('#thread-dialog').open) $('#thread-dialog').showModal()}
+// Live view of a comment that is still being worked on: what the backend is doing right now.
+const runCache = new Map(); let activityTimer = null;
+function activityBox(turn) {
+  const box = element('div', 'activity'); box.dataset.run = turn.run_id || '';
+  fillActivity(box, turn, runCache.get(turn.run_id));
+  if (!activityTimer) activityTimer = setInterval(pollActivity, 1500);
+  return box;
+}
+function fillActivity(box, turn, run) {
+  const started = run?.started, elapsed = started ? Math.max(0, Math.round(Date.now() / 1000 - started)) : 0;
+  const clock = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
+  const state = turn.status === 'queued' || run?.status === 'queued' ? 'Waiting for a free slot' : 'Working';
+  const head = element('div', 'activity-head'); head.append(element('span', 'spinner'), element('strong', '', `${turn.backend || 'backend'} · ${state}`), element('small', 'muted', clock));
+  const steps = element('ol', 'activity-steps');
+  const progress = (run?.progress || []).filter(item => item.text && item.text.trim());
+  if (!progress.length) steps.append(element('li', 'muted', turn.intent === 'auto' ? 'Reading your comment and deciding whether to explain, update the document or start a task…' : 'Starting…'));
+  for (const item of progress.slice(-6)) steps.append(element('li', item.kind === 'text' ? 'said' : '', item.kind === 'text' ? item.text.split('\n')[0].slice(0, 160) : item.text));
+  box.replaceChildren(head, steps);
+}
+async function pollActivity() {
+  const boxes = [...document.querySelectorAll('#thread-dialog[open] .activity')];
+  if (!boxes.length) {clearInterval(activityTimer); activityTimer = null; return}
+  for (const box of boxes) {
+    if (!box.dataset.run) continue;
+    try {const run = await api(`/api/runs/${encodeURIComponent(box.dataset.run)}`); runCache.set(run.id, run);
+      const thread = threads.find(item => item.id === openThreadId), turn = thread?.turns.find(item => item.run_id === run.id) || {status: run.status, backend: run.backend};
+      fillActivity(box, turn, run);
+      if (!['queued', 'running'].includes(run.status)) await refreshThreads();
+    } catch {}
+  }
+}
 function renderDialog() {
   const thread = threads.find(item => item.id === openThreadId); if (!thread) {if ($('#thread-dialog').open) closeThread(); return}
   const body = $('#dialog-body'), footer = $('#dialog-footer'), oldScroll = body.scrollTop, typed = footer.querySelector('textarea')?.value, oldIntent = footer.querySelector('select[name="intent"]')?.value, oldBackend = footer.querySelector('select[name="backend"]')?.value;
@@ -173,6 +204,7 @@ function renderDialog() {
   thread.turns.forEach((turn, index) => {
     const item = element('div', turn.role === 'user' ? 'dialog-user' : 'dialog-answer');
     if (turn.role === 'user') {item.append(element('small', '', `You · ${turn.intent || 'auto'}`), element('p', '', turn.text)); body.append(item); return}
+    if (['queued', 'running'].includes(turn.status)) {item.append(activityBox(turn)); body.append(item); return}
     item.append(element('small', 'answer-meta', `${turn.backend || ''}${turn.model ? ' · ' + turn.model : ''} · ${turn.intent || 'explain'}`));
     if (turn.tldr) {const summary = element('div', 'answer-tldr'); summary.append(element('strong', '', 'TL;DR '), inline(turn.tldr)); item.append(summary)}
     const content = element('div', 'answer-body'); content.innerHTML = render(turn.text || turn.error || '', {topicId}); item.append(content);

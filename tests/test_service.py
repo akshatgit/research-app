@@ -269,3 +269,28 @@ class TestAsk:
         assert service.store.read_doc(t["id"]) == before
         a = service.store.get_thread(t["id"], th["id"])["turns"][-1]
         assert "assets/plot.csv" in a["files_changed"]["created"]
+
+
+def test_running_answer_links_its_run_for_live_progress(service, backends):
+    """While an answer is being worked on, its turn already points at the run, so the UI can
+    show the run's progress (what the backend is doing)."""
+    from research_app.backends.base import Event
+    import threading
+    gate = threading.Event()
+
+    def slow(req):
+        gate.wait(5)
+        return {"events": [Event(kind="tool", text="Searching the web: SLO")]}
+    backends["claude"].script = slow
+    t = service.create_topic("X", research=False)
+    service.store.write_doc(t["id"], "# X\n\nBudget spent = burn rate cancels out.\n")
+    th = service.ask(t["id"], quote="burn rate cancels out", prefix="", suffix="", start=0,
+                     question="Why?")
+    turn = wait_for(lambda: (lambda a: a if a.get("run_id") else None)(
+        service.store.get_thread(t["id"], th["id"])["turns"][-1]))
+    assert turn["role"] == "assistant" and turn["status"] in ("queued", "running")
+    assert service.get_run(turn["run_id"])["status"] in ("queued", "running")
+    gate.set()
+    assert service.wait_idle(10)
+    run = service.get_run(turn["run_id"])
+    assert any(p["text"] == "Searching the web: SLO" for p in run["progress"])

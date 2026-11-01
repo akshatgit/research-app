@@ -136,3 +136,36 @@ def run_stream(command, req, parse, on_event=None, cancel=None):
     else:
         result.ok = True
     return result
+
+
+def _short(text, limit=120):
+    text = ' '.join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + '…'
+
+
+def _rel(path, workdir):
+    """Show a path relative to the workspace when it is inside it."""
+    path = str(path or '')
+    root = str(workdir or '').rstrip('/')
+    if root and path.startswith(root + '/'):
+        return path[len(root) + 1:]
+    return path
+
+
+def describe_tool(name, tool_input, workdir=None):
+    """A readable progress line for a Claude tool call, e.g. 'Searching the web: SLO burn rate'."""
+    i = tool_input if isinstance(tool_input, dict) else {}
+    path = _rel(i.get('file_path') or i.get('path') or i.get('notebook_path'), workdir)
+    labels = {
+        'WebSearch': lambda: f"Searching the web: {i.get('query', '')}",
+        'WebFetch': lambda: f"Reading {i.get('url', '')}",
+        'Read': lambda: f"Reading {path}",
+        'Write': lambda: f"Writing {path}",
+        'Edit': lambda: f"Editing {path}",
+        'MultiEdit': lambda: f"Editing {path}",
+        'NotebookEdit': lambda: f"Editing {path}",
+        'Bash': lambda: f"Running: {i.get('command', '')}",
+        'Grep': lambda: f"Searching files for {i.get('pattern', '')}",
+        'Glob': lambda: f"Finding files: {i.get('pattern', '')}",
+    }
+    return _short(labels[name]() if name in labels else f"Using {name}")
