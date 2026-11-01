@@ -28,3 +28,38 @@ Surrounding text: {passage}
 Earlier turns:
 {history}
 Question: {question}'''
+
+
+def update_prompt(thread, question, doc, history=''):
+    return f'''You may edit doc.md to answer this update request. Keep other sections and citations intact. Explain what changed, or say if no change was needed.
+
+## Current doc.md
+{doc}
+
+Passage: {thread['quote']}
+Surrounding text: {thread['prefix']}{thread['quote']}{thread['suffix']}
+Earlier turns:
+{history}
+Question: {question}'''
+
+
+def task_prompt(thread, question, doc, history=''):
+    return f'''Complete this task in the topic workspace. You may edit doc.md, assets, and tracker.json. Keep tracker.json current and report the work and sources used.
+
+## Current doc.md
+{doc}
+
+Passage: {thread['quote']}
+Surrounding text: {thread['prefix']}{thread['quote']}{thread['suffix']}
+Earlier turns:
+{history}
+Task: {question}'''
+
+
+def resumed_prompt(intent, thread, question):
+    rules = {
+        'explain': 'Give a concise answer. Do not edit doc.md.',
+        'update': 'You may edit doc.md. Keep other sections and citations intact.',
+        'task': 'Complete this task in the workspace; you may edit doc.md and tracker.json.',
+    }
+    return f"{rules[intent]}\nPassage: {thread['quote']}\nQuestion: {question}"

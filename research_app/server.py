@@ -37,6 +37,8 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765, allowed
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(data)))
             self.send_header('X-Content-Type-Options', 'nosniff')
+            # Revalidate every time, so a deploy is picked up without a hard refresh.
+            self.send_header('Cache-Control', 'no-cache')
             if sandbox:
                 self.send_header('Content-Security-Policy', 'sandbox')
             self.end_headers()
@@ -145,7 +147,7 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765, allowed
                         if self.command == 'POST':
                             body = self._body()
                             if body is not None:
-                                return self._send(201, service.ask(tid, body.get('quote', ''), body.get('prefix', ''), body.get('suffix', ''), body.get('start', 0), body.get('question', ''), body.get('backend'), body.get('section_id')))
+                                return self._send(201, service.ask(tid, body.get('quote', ''), body.get('prefix', ''), body.get('suffix', ''), body.get('start', 0), body.get('question', ''), body.get('backend'), body.get('section_id'), body.get('intent', 'explain')))
                     if len(tail) >= 2 and tail[0] == 'threads':
                         thread_id = tail[1]
                         if len(tail) == 2 and self.command == 'DELETE':
@@ -156,11 +158,19 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765, allowed
                             if body is None:
                                 return
                             if tail[2] == 'turns':
-                                return self._send(202, service.follow_up(tid, thread_id, body.get('question', ''), body.get('backend')))
+                                return self._send(202, service.follow_up(tid, thread_id, body.get('question', ''), body.get('backend'), body.get('intent', 'explain')))
                             if tail[2] == 'retry':
                                 return self._send(202, service.retry(tid, thread_id))
                             if tail[2] == 'resolve':
                                 return self._send(200, service.store.set_thread_resolved(tid, thread_id, body.get('resolved')))
+                        if (len(tail) == 5 and tail[2] == 'turns' and tail[4] == 'undo'
+                                and self.command == 'POST'):
+                            if self._body() is not None:
+                                try:
+                                    number = int(tail[3])
+                                except ValueError:
+                                    raise KeyError(tail[3])
+                                return self._send(200, service.undo_edit(tid, thread_id, number))
                 self._send(404, {'error': 'not found'})
             except KeyError as exc:
                 self._send(404, {'error': str(exc)})

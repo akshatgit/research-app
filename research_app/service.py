@@ -1,5 +1,7 @@
 """Background run orchestration and thread sessions."""
 from concurrent.futures import ThreadPoolExecutor, wait
+import difflib
+import re
 import subprocess
 import shutil
 import threading
@@ -8,7 +10,9 @@ import uuid
 from .backends.base import RunRequest, normalize_usage
 from .fsutil import atomic_write_text
 from .fsutil import snapshot, diff_snapshots
-from .prompts import research_prompt, answer_prompt
+from .prompts import research_prompt, answer_prompt, update_prompt, task_prompt, resumed_prompt
+
+INTENTS = {'explain': 'answer', 'update': 'edit', 'task': 'task'}
 
 
 class Service:
@@ -44,13 +48,17 @@ class Service:
         prompt = research_prompt(topic, instruction, self.store.read_doc(topic_id))
         return self._enqueue(topic_id, 'research', name, prompt, instruction=instruction)
 
-    def ask(self, topic_id, quote, prefix, suffix, start, question, backend=None, section_id=None):
+    def ask(self, topic_id, quote, prefix, suffix, start, question, backend=None, section_id=None, intent='explain'):
+        if intent not in INTENTS:
+            raise ValueError('unknown intent')
         name = self._backend(topic_id, backend)
-        th = self.store.create_thread(topic_id, quote, prefix, suffix, start, question, name, section_id=section_id)
-        self._answer(topic_id, th['id'], th['turns'][0]['text'], name)
+        th = self.store.create_thread(topic_id, quote, prefix, suffix, start, question, name, section_id=section_id, intent=intent)
+        self._answer(topic_id, th['id'], th['turns'][0]['text'], name, intent=intent)
         return th
 
-    def follow_up(self, topic_id, thread_id, question, backend=None):
+    def follow_up(self, topic_id, thread_id, question, backend=None, intent='explain'):
+        if intent not in INTENTS:
+            raise ValueError('unknown intent')
         with self.lock:
             th = self.store.get_thread(topic_id, thread_id)
             if th['turns'][-1].get('status') in ('queued', 'running'):
@@ -60,8 +68,8 @@ class Service:
             name = backend or th['turns'][-1]['backend']
             if name not in self.backends:
                 raise ValueError('unknown backend')
-            self.store.append_turn(topic_id, thread_id, {'role': 'user', 'text': question, 'backend': name})
-            self._answer(topic_id, thread_id, question, name)
+            self.store.append_turn(topic_id, thread_id, {'role': 'user', 'text': question, 'backend': name, 'intent': intent})
+            self._answer(topic_id, thread_id, question, name, intent=intent)
             return self.store.get_thread(topic_id, thread_id)
 
     def retry(self, topic_id, thread_id):
@@ -72,18 +80,21 @@ class Service:
                 raise RuntimeError('nothing to retry')
             name = last['backend']
             question = th['turns'][-2]['text']
-            self.store.replace_last_turn(topic_id, thread_id, {'role': 'assistant', 'text': '', 'backend': name, 'status': 'queued'})
-            self._answer(topic_id, thread_id, question, name, replace=True)
+            intent = last.get('intent', th['turns'][-2].get('intent', 'explain'))
+            self.store.replace_last_turn(topic_id, thread_id, {'role': 'assistant', 'text': '', 'backend': name, 'status': 'queued', 'intent': intent})
+            self._answer(topic_id, thread_id, question, name, replace=True, intent=intent)
             return self.store.get_thread(topic_id, thread_id)
 
-    def _answer(self, topic_id, thread_id, question, name, replace=False):
+    def _answer(self, topic_id, thread_id, question, name, replace=False, intent='explain'):
         th = self.store.get_thread(topic_id, thread_id)
         session = th.get('sessions', {}).get(name)
         history = '' if session else '\n'.join(f"{t['role']} ({t['backend']}): {t['text']}" for t in th['turns'][:-1])
-        prompt = question if session else answer_prompt(th, question, self.store.read_doc(topic_id), history)
+        builders = {'explain': answer_prompt, 'update': update_prompt, 'task': task_prompt}
+        prompt = resumed_prompt(intent, th, question) if session else builders[intent](th, question, self.store.read_doc(topic_id), history)
         if not replace:
-            self.store.append_turn(topic_id, thread_id, {'role': 'assistant', 'text': '', 'backend': name, 'status': 'queued'})
-        self._enqueue(topic_id, 'answer', name, prompt, thread_id=thread_id, session_id=session)
+            self.store.append_turn(topic_id, thread_id, {'role': 'assistant', 'text': '', 'backend': name, 'status': 'queued', 'intent': intent})
+        self._enqueue(topic_id, INTENTS[intent], name, prompt, thread_id=thread_id, session_id=session,
+                      question=question, intent=intent)
 
     def _enqueue(self, topic_id, kind, backend, prompt, **extra):
         run_id = uuid.uuid4().hex
@@ -96,6 +107,11 @@ class Service:
             self.runs[run_id] = run
             self.cancels[run_id] = threading.Event()
             self.store.save_run(topic_id, run, prompt=prompt, raw=[], stderr='')
+            if thread_id := run.get('thread_id'):
+                fields = {'run_id': run_id}
+                if kind == 'task':
+                    fields['task_run_id'] = run_id
+                self.store.update_last_turn(topic_id, thread_id, **fields)
             future = self.pool.submit(self._execute, run_id, prompt)
             self.futures.append(future)
             return dict(run)
@@ -112,8 +128,10 @@ class Service:
                 return
             run['status'] = 'running'
             self.store.save_run(topic_id, run)
+            if run.get('thread_id'):
+                self.store.update_last_turn(topic_id, run['thread_id'], status='running')
         before = snapshot(d)
-        old_doc = self.store.read_doc(topic_id) if run['kind'] == 'answer' else None
+        old_doc = self.store.read_doc(topic_id)
         def event(ev):
             with self.lock:
                 run['progress'].append({'kind': ev.kind, 'text': ev.text, 'at': time.time()})
@@ -130,14 +148,17 @@ class Service:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(source, target)
                     transcript = target.relative_to(d).as_posix()
-            if old_doc is not None and self.store.read_doc(topic_id) != old_doc:
+            if run['kind'] == 'answer' and self.store.read_doc(topic_id) != old_doc:
                 self.store.write_doc(topic_id, old_doc)
+            new_doc = self.store.read_doc(topic_id)
+            doc_diff = ''.join(difflib.unified_diff(old_doc.splitlines(keepends=True),
+                new_doc.splitlines(keepends=True), fromfile='doc.md before', tofile='doc.md after'))
             changed = diff_snapshots(before, snapshot(d))
             # Claude Code reports cost for the whole session, so a resumed run reports the
             # running total. Record that total, and charge this run only what it added.
             session_cost = result.cost_usd
             cost = session_cost
-            if run.get('session_id') and session_cost is not None and run['kind'] == 'answer':
+            if run.get('session_id') and session_cost is not None and run.get('thread_id'):
                 earlier = [turn.get('session_cost_usd') for turn in
                            self.store.get_thread(topic_id, run['thread_id'])['turns']
                            if turn.get('session_id') == run['session_id']
@@ -150,16 +171,23 @@ class Service:
                            command=result.command, exit_code=result.exit_code,
                            usage=normalize_usage(run['backend'], result.usage), transcript=transcript,
                            cost_usd=cost, session_cost_usd=session_cost, duration_s=result.duration_s,
-                           finished=time.time(), files_changed=changed)
+                           finished=time.time(), files_changed=changed, doc_diff=doc_diff)
                 self.store.save_run(topic_id, run, prompt=prompt, raw=result.raw, stderr=result.stderr)
-                if run['kind'] == 'answer':
+                if run.get('thread_id'):
+                    th = self.store.get_thread(topic_id, run['thread_id'])
+                    passage_changed = bool(th['quote'].strip()) and re.sub(r'\s+', ' ', th['quote']).strip() not in re.sub(r'\s+', ' ', new_doc)
                     self.store.update_last_turn(topic_id, run['thread_id'], text=result.text,
                         status=run['status'], backend=run['backend'], model=result.model,
                         session_id=result.session_id, run_id=run_id, files_changed=changed,
                         error_kind=result.error_kind, error=result.error, usage=run['usage'],
-                        cost_usd=cost, session_cost_usd=session_cost)
+                        cost_usd=cost, session_cost_usd=session_cost, intent=run['intent'],
+                        doc_diff=doc_diff, passage_changed=passage_changed,
+                        **({'undone': False} if run['kind'] == 'edit' else {}),
+                        **({'task_run_id': run_id} if run['kind'] == 'task' else {}))
                     number = len(self.store.get_thread(topic_id, run['thread_id'])['turns'])
                     self.store.save_turn_record(topic_id, run['thread_id'], number, run['backend'], prompt, result.raw)
+                    if run['kind'] == 'edit':
+                        self.store.save_turn_doc_versions(topic_id, run['thread_id'], number, run['backend'], old_doc, new_doc)
             with self.git_locks[topic_id]:
                 subprocess.run(['git', '-C', str(d), 'add', '-A'], capture_output=True)
                 subprocess.run(['git', '-C', str(d), '-c', 'user.name=Research App',
@@ -169,6 +197,27 @@ class Service:
             with self.lock:
                 run.update(status='error', error_kind='failed', error=str(exc), finished=time.time())
                 self.store.save_run(topic_id, run)
+
+    def undo_edit(self, topic_id, thread_id, turn_number):
+        with self.lock:
+            th = self.store.get_thread(topic_id, thread_id)
+            if not isinstance(turn_number, int) or turn_number < 1 or turn_number > len(th['turns']):
+                raise KeyError(turn_number)
+            turn = th['turns'][turn_number - 1]
+            if turn.get('role') != 'assistant' or turn.get('intent') != 'update' or turn.get('undone'):
+                raise ValueError('not an undoable update turn')
+            before, after = self.store.read_turn_doc_versions(topic_id, thread_id, turn_number, turn['backend'])
+            if self.store.read_doc(topic_id) != after:
+                raise RuntimeError('doc.md changed since this edit')
+            self.store.write_doc(topic_id, before)
+            th = self.store.update_turn(topic_id, thread_id, turn_number, undone=True)
+            d = self.store.topic_dir(topic_id)
+            with self.git_locks.setdefault(topic_id, threading.Lock()):
+                subprocess.run(['git', '-C', str(d), 'add', '-A'], capture_output=True)
+                subprocess.run(['git', '-C', str(d), '-c', 'user.name=Research App',
+                                '-c', 'user.email=local@research.invalid', 'commit', '--allow-empty',
+                                '-qm', f'Undo edit {turn.get("run_id", thread_id)}'], capture_output=True)
+            return th
 
     def get_run(self, run_id):
         with self.lock:

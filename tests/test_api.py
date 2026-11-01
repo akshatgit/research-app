@@ -350,3 +350,10 @@ class TestNetworkAccess:  # N1 (revised): opt-in network binding, still DNS-rebi
                         json.dumps({"title": "x", "research": False})) == 201
         bad = {**ok, "Origin": "https://evil.example"}
         assert self.raw(lan_server, "POST", "/api/topics", bad, json.dumps({"title": "y"})) == 403
+
+
+def test_static_files_are_revalidated(server):
+    """After a deploy the browser must not keep running a cached app.js."""
+    for path in ("/", "/web/app.js"):
+        code, _, headers = server.client.get(path, raw=True)
+        assert code == 200 and headers.get("Cache-Control") == "no-cache"

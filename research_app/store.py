@@ -101,14 +101,36 @@ class Store:
         atomic_write_text(turns / f'{stem}.prompt.md', prompt)
         atomic_write_text(turns / f'{stem}.events.jsonl', ''.join(line + '\n' for line in raw))
 
-    def create_thread(self, topic_id, quote, prefix, suffix, start, question, backend, section_id=None):
+    def save_turn_doc_versions(self, topic_id, thread_id, number, backend, before, after):
+        turns = self.topic_dir(topic_id) / 'threads' / thread_id / 'turns'
+        turns.mkdir(parents=True, exist_ok=True)
+        stem = f'{number:03d}-{backend}'
+        atomic_write_text(turns / f'{stem}.doc-before.md', before)
+        atomic_write_text(turns / f'{stem}.doc-after.md', after)
+
+    def read_turn_doc_versions(self, topic_id, thread_id, number, backend):
+        turns = self.topic_dir(topic_id) / 'threads' / thread_id / 'turns'
+        stem = f'{number:03d}-{backend}'
+        return ((turns / f'{stem}.doc-before.md').read_text(),
+                (turns / f'{stem}.doc-after.md').read_text())
+
+    def update_turn(self, topic_id, thread_id, number, **fields):
+        with self.lock:
+            th = self.get_thread(topic_id, thread_id)
+            if not isinstance(number, int) or number < 1 or number > len(th['turns']):
+                raise KeyError(number)
+            th['turns'][number - 1].update(fields)
+            self._save_thread(topic_id, th)
+            return th
+
+    def create_thread(self, topic_id, quote, prefix, suffix, start, question, backend, section_id=None, intent='explain'):
         d = self.topic_dir(topic_id)
         if not isinstance(quote, str) or not quote.strip() or backend not in ('claude', 'codex'):
             raise ValueError('invalid thread')
         tid = uuid.uuid4().hex
         th = {'id': tid, 'topic_id': topic_id, 'quote': quote, 'prefix': prefix, 'suffix': suffix,
               'start': start, 'section_id': section_id, 'created': time.time(), 'sessions': {}, 'resolved': False, 'resolved_at': None,
-              'turns': [{'role': 'user', 'text': question or 'What does this mean?', 'backend': backend, 'at': time.time()}]}
+              'turns': [{'role': 'user', 'text': question or 'What does this mean?', 'backend': backend, 'intent': intent, 'at': time.time()}]}
         self._save_thread(topic_id, th)
         return th
 

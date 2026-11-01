@@ -67,7 +67,8 @@ def load_tracker(workdir):
 def _run_track(run):
     files = run.get('files_changed') or {}
     return {'id': 'run-' + run['id'], 'run_id': run['id'],
-            'title': run.get('instruction') or 'Research run',
+            'title': run.get('instruction') or run.get('question') or 'Research run',
+            **({'thread_id': run['thread_id']} if run.get('thread_id') else {}),
             'status': RUN_STATUS.get(run.get('status'), 'pending'),
             'owner': run.get('backend') or 'you',
             'updated': run.get('finished') or run.get('started'),
@@ -106,7 +107,8 @@ def build_overview(store, topic_id):
         track.setdefault('summary', '')
         track.setdefault('updated', None)
         tracks.append(track)
-    tracks.extend(_run_track(r) for r in runs if r['id'] in research_runs and r['id'] not in linked)
+    tracks.extend(_run_track(r) for r in runs if (r['id'] in research_runs and r['id'] not in linked)
+                  or r.get('kind') == 'task')
     stats = tracker['stats'] or [
         {'label': 'Sources', 'value': len(parse_sources(doc))},
         {'label': 'Charts', 'value': len(parse_viz_blocks(doc))},
