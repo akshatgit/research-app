@@ -16,9 +16,10 @@ WEB = Path(__file__).resolve().parent.parent / 'web'
 MAX_BODY = 2 * 1024 * 1024
 
 
-def create_server(data_root, backends=None, host='127.0.0.1', port=8765):
-    if host != '127.0.0.1':
-        raise ValueError('server must bind 127.0.0.1')
+def create_server(data_root, backends=None, host='127.0.0.1', port=8765, allowed_hosts=None):
+    # Loopback by default. Binding another interface is an explicit choice; requests must still
+    # name this server (loopback or allowed_hosts) in Host/Origin, which blocks DNS rebinding.
+    names = {'127.0.0.1', 'localhost', *(allowed_hosts or [])}
     service = Service(Store(data_root), backends or get_backends())
 
     class Handler(BaseHTTPRequestHandler):
@@ -44,7 +45,7 @@ def create_server(data_root, backends=None, host='127.0.0.1', port=8765):
 
         def _check(self):
             host_value = self.headers.get('Host', '')
-            allowed = {f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'}
+            allowed = {f'{name}:{self.server.server_port}' for name in names}
             if host_value not in allowed:
                 self._send(403, {'error': 'invalid Host'})
                 return False

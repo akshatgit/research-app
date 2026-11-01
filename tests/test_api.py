@@ -310,3 +310,43 @@ class TestResolveApi:  # H14
                       {"resolved": "yes"})[0] == 400
         assert c.post(f"/api/topics/{t['id']}/threads/missing/resolve",
                       {"resolved": True})[0] == 404
+
+
+class TestNetworkAccess:  # N1 (revised): opt-in network binding, still DNS-rebinding safe
+    @pytest.fixture
+    def lan_server(self, tmp_path, backends):
+        import threading
+        from research_app.server import create_server
+        srv = create_server(tmp_path / "data", backends=backends, host="0.0.0.0", port=0,
+                            allowed_hosts=["10.0.0.164", "vm.tailnet.example"])
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        yield srv
+        srv.shutdown(); srv.server_close(); srv.service.shutdown()
+
+    def raw(self, srv, method, path, headers, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+        conn.request(method, path, body=body, headers=headers)
+        r = conn.getresponse(); r.read(); conn.close()
+        return r.status
+
+    def test_binds_requested_interface(self, lan_server):
+        assert lan_server.server_address[0] == "0.0.0.0"
+
+    def test_allowed_names_and_loopback_accepted(self, lan_server):
+        port = lan_server.server_address[1]
+        for name in ("10.0.0.164", "vm.tailnet.example", "127.0.0.1", "localhost"):
+            assert self.raw(lan_server, "GET", "/api/topics", {"Host": f"{name}:{port}"}) == 200
+
+    def test_other_names_and_wrong_port_rejected(self, lan_server):
+        port = lan_server.server_address[1]
+        assert self.raw(lan_server, "GET", "/api/topics", {"Host": f"evil.example:{port}"}) in (400, 403)
+        assert self.raw(lan_server, "GET", "/api/topics", {"Host": "10.0.0.164:1"}) in (400, 403)
+
+    def test_origin_must_match_an_allowed_name(self, lan_server):
+        port = lan_server.server_address[1]
+        ok = {"Host": f"10.0.0.164:{port}", "Origin": f"http://10.0.0.164:{port}",
+              "Content-Type": "application/json"}
+        assert self.raw(lan_server, "POST", "/api/topics", ok,
+                        json.dumps({"title": "x", "research": False})) == 201
+        bad = {**ok, "Origin": "https://evil.example"}
+        assert self.raw(lan_server, "POST", "/api/topics", bad, json.dumps({"title": "y"})) == 403

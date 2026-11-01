@@ -7,6 +7,10 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${RESEARCH_APP_PORT:-8765}"
+# Network access is opt-in. The app has no login: anyone who can reach it can run the backends
+# as you. RESEARCH_APP_ALLOWED_HOSTS lists the names/IPs browsers will use (space-separated).
+HOST="${RESEARCH_APP_HOST:-127.0.0.1}"
+ALLOWED_HOSTS="${RESEARCH_APP_ALLOWED_HOSTS:-}"
 DATA="${RESEARCH_APP_DATA:-$HOME/research-data}"
 CONF_DIR="$HOME/.config/research-app"
 UNIT_DIR="$HOME/.config/systemd/user"
@@ -35,6 +39,8 @@ cat > "$CONF_DIR/env" <<ENV
 PATH=$LOGIN_PATH
 RESEARCH_APP_PORT=$PORT
 RESEARCH_APP_DATA=$DATA
+RESEARCH_APP_HOST=$HOST
+RESEARCH_APP_ALLOWED_HOSTS=$ALLOWED_HOSTS
 ENV
 sed "s|@APP_DIR@|$APP_DIR|g" "$APP_DIR/deploy/research-app.service" > "$UNIT_DIR/research-app.service"
 
@@ -46,8 +52,9 @@ loginctl enable-linger "$USER" 2>/dev/null || true
 
 for _ in $(seq 1 20); do
   if curl -fsS "http://127.0.0.1:$PORT/api/topics" >/dev/null 2>&1; then
-    echo "research-app is running on http://127.0.0.1:$PORT (data: $DATA)"
-    echo "From your Mac: ssh -N -L $PORT:127.0.0.1:$PORT <this-host>  then open http://127.0.0.1:$PORT"
+    echo "research-app is running (data: $DATA)"
+    for name in 127.0.0.1 $ALLOWED_HOSTS; do echo "  http://$name:$PORT"; done
+    [ "$HOST" = 127.0.0.1 ] && echo "Local only. From another machine: ssh -N -L $PORT:127.0.0.1:$PORT <this-host>"
     exit 0
   fi
   sleep 0.5
