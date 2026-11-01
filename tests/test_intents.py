@@ -43,13 +43,15 @@ def answers(service, t, th):
 
 # ---------- I1/I2: explain is the default and never edits ----------
 
-def test_default_intent_is_explain_and_doc_is_protected(service, backends):
+def test_undeclared_answer_is_explain_and_doc_is_protected(service, backends):
+    """v0.7: the default intent is auto. An answer that declares no intent counts as
+    explain, and its edits to doc.md are reverted (A2)."""
     backends["claude"].script = lambda req: {"write": {"doc.md": "# wiped\n"}}
     t = topic(service)
     th = service.ask(t["id"], question="Why?", **ANCHOR)
     assert service.wait_idle(10)
     turns = service.store.get_thread(t["id"], th["id"])["turns"]
-    assert turns[0]["intent"] == "explain" and turns[1]["intent"] == "explain"
+    assert turns[0]["intent"] == "auto" and turns[1]["intent"] == "explain"
     assert service.store.read_doc(t["id"]) == DOC
     assert service.store.list_runs(t["id"])[0]["kind"] == "answer"
 

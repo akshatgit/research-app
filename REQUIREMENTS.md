@@ -1,4 +1,4 @@
-# Research App: Requirements (v0.6, 2026-10-31)
+# Research App: Requirements (v0.7, 2026-10-31)
 
 ## Purpose
 
@@ -126,6 +126,18 @@ Every question in a comment thread, the first one and each follow-up, has an **i
 | I6 | Update and task resume the thread's CLI session when the backend matches, so they know the discussion. Otherwise they get the thread as text, as follow-ups do (K3). | M |
 | I7 | If an update or task removes or rewrites the highlighted passage, the answer turn is marked `passage_changed`, and the card says so instead of silently becoming an orphan. | M |
 | C1 | Every comment card has a visible chevron to collapse and expand it. The comment margin has **Collapse all** and **Hide comments**. Hidden comments leave the document full width, with a small "Show comments (n)" button. Both choices are remembered in the browser. | M |
+
+### Reading answers, automatic intent and titles (v0.7)
+
+| ID | Requirement | Pri |
+|---|---|---|
+| P1 | **Compact comment cards.** A card shows the quote, the first question, earlier exchanges as one-line entries (question, then the answer's TL;DR), the latest answer's **TL;DR** (at most about four lines), "Read full answer", and the answer count and status. Long answers and the reply box are not in the margin. | M |
+| P2 | **Full answers in a pop-up.** "Read full answer", or clicking the highlight, opens a centred dialog (about 860 px wide and 86% of the screen height) with the quote, every turn (each answer as a TL;DR box followed by the full text) and the reply box. It closes with ✕, Esc or a click outside. | M |
+| P3 | **TL;DR first.** Every answer starts with a one- or two-sentence TL;DR. The app stores it as `tldr`, separate from the body. Older answers without one fall back to their first sentence. | M |
+| A1 | **Intent is worked out from the comment.** The default intent is `auto`. The backend reads the comment, with the thread as context, chooses explain, update or task, and declares it on the first line of its answer (`INTENT: …`). The answer turn records the resolved `intent` and `intent_source` (`auto` or `user`). | M |
+| A2 | **Safety under auto.** Only an explicit `INTENT: update` or `INTENT: task` may change `doc.md`. If the backend declares explain, or declares nothing, any change to `doc.md` is reverted and the turn records `doc_restored`. Update and task then behave as in I3–I5 (diff, undo, track). | M |
+| A3 | **Override.** The reply box has a small `Auto ▾` selector (Auto, Explain, Update doc, Task). Choosing one forces that intent, which behaves exactly as in v0.6. | M |
+| TT1 | **Titles from the problem statement.** "New topic" asks "What do you want to research?" (the statement), with the title optional. Without a title, the topic gets a working title from the statement's first sentence (at most 60 characters, cut at a word boundary with "…"). After a research run, the topic title follows the `# H1` of `doc.md` unless you typed the title yourself (`title_source`: `statement`, `doc` or `user`). The statement is stored as the topic's focus. | M |
 
 ### General questions
 

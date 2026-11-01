@@ -332,6 +332,46 @@ New tests: `tests/test_intents.py` (its docstring is the contract). Requirements
   **Collapse all** and **Hide comments**. When hidden, the document goes full width and a
   small "Show comments (n)" button appears. Both are remembered in localStorage.
 
+## v0.7: pop-up answers, TL;DR, intent from the comment, titles from statements
+
+New tests: `tests/test_v07.py` (its docstring is the contract). `tests/test_intents.py` now
+expects the default intent to be `auto`. Requirements: P1–P3, A1–A3 and TT1.
+
+- `research_app/answers.py`: `parse_answer`. The service stores the answer's `tldr`, and
+  stores `text` without the INTENT/TL;DR header lines. Old answers keep working: compute a
+  missing `tldr` with `parse_answer` when serving threads.
+- Intents: `auto` (the default), `explain`, `update`, `task`. The **auto** prompt lists the
+  three options, tells the backend to choose from the comment and the thread, and requires
+  the first line to be `INTENT: explain|update|task` and the second `TL;DR: …`. It includes
+  the exact phrase "do not edit doc.md" for the explain case. Run auto with edit permission,
+  then resolve: declared update gives kind `edit` (diff, undo); declared task gives kind
+  `task` (`task_run_id`, track); explain or nothing gives kind `answer` and reverts doc.md
+  with `doc_restored: true`. A forced intent (`intent_source: user`) behaves as in v0.6, and
+  its prompt doesn't ask the backend to choose (no `INTENT:`), but it still asks for a
+  TL;DR line.
+- Titles: `create_topic(..., statement=...)` with the working-title rule from the
+  test docstring, and `title_source` (`statement`, `doc` or `user`). After any research run,
+  if `title_source` isn't `user` and doc.md has a `# H1`, set the title from the H1 with
+  `title_source: doc`. The API takes `statement` (and `title` stays optional).
+- UI:
+  - **Compact cards (P1):** the chevron; the quote; the first question; earlier exchanges as
+    one-line entries ("question → tldr", clamped to one line); the latest answer's tldr
+    (clamped to 4 lines) with its intent label; a "Read full answer" button; "N answers ·
+    status". No turns or reply form in the card. Don't repeat the first question as the first
+    one-liner.
+  - **Pop-up (P2):** a centred `<dialog>` about `min(860px, 92vw)` wide and 86vh tall, with a
+    dimmed backdrop. Header: "Comment", the quote, ✕. Body: each user turn as a tinted bubble
+    ("You · intent"); each answer with a small "backend · model · intent" line, a TL;DR box
+    (accent left border), the full Markdown body, and that turn's extras (diff with Undo,
+    task status, passage changed, usage line). Footer: the reply textarea, an `Auto ▾`
+    select (Auto, Explain, Update doc, Task), the backend select, and Send, plus Resolve,
+    Retry and Delete. Close with ✕, Esc or a backdrop click. "Read full answer" and a click
+    on an open card's highlight open it. The pop-up re-renders in place when the thread
+    updates (keep the scroll position and any typed reply). Remove the v0.6 three-button
+    composer.
+  - **New topic:** a large "What do you want to research?" textarea (the statement),
+    "Title (optional)", and the backend picker.
+
 ## Definition of done
 
 - `make test` passes: every Python test (except the opt-in live ones) and every JS test.
