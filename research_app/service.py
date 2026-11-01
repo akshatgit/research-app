@@ -1,10 +1,12 @@
 """Background run orchestration and thread sessions."""
 from concurrent.futures import ThreadPoolExecutor, wait
 import subprocess
+import shutil
 import threading
 import time
 import uuid
-from .backends.base import RunRequest
+from .backends.base import RunRequest, normalize_usage
+from .fsutil import atomic_write_text
 from .fsutil import snapshot, diff_snapshots
 from .prompts import research_prompt, answer_prompt
 
@@ -93,7 +95,7 @@ class Service:
         with self.lock:
             self.runs[run_id] = run
             self.cancels[run_id] = threading.Event()
-            self.store.save_run(topic_id, run)
+            self.store.save_run(topic_id, run, prompt=prompt, raw=[], stderr='')
             future = self.pool.submit(self._execute, run_id, prompt)
             self.futures.append(future)
             return dict(run)
@@ -119,21 +121,45 @@ class Service:
         try:
             req = RunRequest(prompt, d, session_id=run.get('session_id'))
             result = self.backends[run['backend']].run(req, event, cancel)
+            transcript = None
+            if result.session_id:
+                finder = getattr(self.backends[run['backend']], 'transcript_path', None)
+                source = finder(result.session_id, d) if finder else None
+                if source and source.is_file():
+                    target = d / 'sessions' / run['backend'] / f'{result.session_id}.jsonl'
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+                    transcript = target.relative_to(d).as_posix()
             if old_doc is not None and self.store.read_doc(topic_id) != old_doc:
                 self.store.write_doc(topic_id, old_doc)
             changed = diff_snapshots(before, snapshot(d))
+            # Claude Code reports cost for the whole session, so a resumed run reports the
+            # running total. Record that total, and charge this run only what it added.
+            session_cost = result.cost_usd
+            cost = session_cost
+            if run.get('session_id') and session_cost is not None and run['kind'] == 'answer':
+                earlier = [turn.get('session_cost_usd') for turn in
+                           self.store.get_thread(topic_id, run['thread_id'])['turns']
+                           if turn.get('session_id') == run['session_id']
+                           and turn.get('session_cost_usd') is not None]
+                if earlier and session_cost >= max(earlier):
+                    cost = session_cost - max(earlier)
             with self.lock:
                 run.update(status='done' if result.ok else ('cancelled' if result.error_kind == 'cancelled' else 'error'),
                            model=result.model, text=result.text, error_kind=result.error_kind, error=result.error,
-                           command=result.command, exit_code=result.exit_code, usage=result.usage,
-                           cost_usd=result.cost_usd, duration_s=result.duration_s,
+                           command=result.command, exit_code=result.exit_code,
+                           usage=normalize_usage(run['backend'], result.usage), transcript=transcript,
+                           cost_usd=cost, session_cost_usd=session_cost, duration_s=result.duration_s,
                            finished=time.time(), files_changed=changed)
-                self.store.save_run(topic_id, run)
+                self.store.save_run(topic_id, run, prompt=prompt, raw=result.raw, stderr=result.stderr)
                 if run['kind'] == 'answer':
                     self.store.update_last_turn(topic_id, run['thread_id'], text=result.text,
                         status=run['status'], backend=run['backend'], model=result.model,
                         session_id=result.session_id, run_id=run_id, files_changed=changed,
-                        error_kind=result.error_kind, error=result.error)
+                        error_kind=result.error_kind, error=result.error, usage=run['usage'],
+                        cost_usd=cost, session_cost_usd=session_cost)
+                    number = len(self.store.get_thread(topic_id, run['thread_id'])['turns'])
+                    self.store.save_turn_record(topic_id, run['thread_id'], number, run['backend'], prompt, result.raw)
             with self.git_locks[topic_id]:
                 subprocess.run(['git', '-C', str(d), 'add', '-A'], capture_output=True)
                 subprocess.run(['git', '-C', str(d), '-c', 'user.name=Research App',

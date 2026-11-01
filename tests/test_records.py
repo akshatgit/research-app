@@ -268,3 +268,22 @@ def test_records_not_served_by_files_api(server, backends):
     for path in (f"threads/{th['id']}/thread.json", f"threads/{th['id']}/turns/001-user.md",
                  "sessions/claude/x.jsonl"):
         assert c.get(f"/api/topics/{t['id']}/files/{path}", raw=True)[0] in (400, 403, 404)
+
+
+def test_resumed_session_cost_is_per_turn(service, backends):
+    """Claude Code reports total_cost_usd for the whole session, so a resumed follow-up
+    reports the running total. Seen live: $0.166 for the first answer, then $0.206 for a
+    follow-up that cost $0.040. Each turn must show what it cost."""
+    totals = iter([0.166, 0.206])
+    backends["claude"].script = lambda req: {"cost": next(totals)}
+    t, _ = topic_with_doc(service)
+    th = service.ask(t["id"], question="Why?", **ANCHOR)
+    assert service.wait_idle(10)
+    service.follow_up(t["id"], th["id"], "And the 6h page?")
+    assert service.wait_idle(10)
+    a1, a2 = [x for x in service.store.get_thread(t["id"], th["id"])["turns"]
+              if x["role"] == "assistant"]
+    assert a1["cost_usd"] == pytest.approx(0.166)
+    assert a2["cost_usd"] == pytest.approx(0.040)
+    assert a2["session_cost_usd"] == pytest.approx(0.206)
+    assert service.store.list_runs(t["id"])[0]["cost_usd"] == pytest.approx(0.040)

@@ -38,6 +38,8 @@ class RunResult:
     exit_code: int | None = None
     command: list[str] = field(default_factory=list)
     duration_s: float = 0.0
+    raw: list[str] = field(default_factory=list)
+    stderr: str = ''
 
 
 class Backend(Protocol):
@@ -55,8 +57,20 @@ def classify_error(text):
     return 'failed'
 
 
+def normalize_usage(backend_name, usage):
+    usage = usage or {}
+    cached = usage.get('cache_read_input_tokens', 0) if backend_name == 'claude' else usage.get('cached_input_tokens', 0)
+    input_tokens = usage.get('input_tokens', 0)
+    return {'input': max(0, input_tokens - cached) if backend_name == 'codex' else input_tokens,
+            'cached': cached,
+            'cache_write': usage.get('cache_creation_input_tokens', 0) if backend_name == 'claude' else usage.get('cache_write_input_tokens', 0),
+            'output': usage.get('output_tokens', 0)}
+
+
 def run_stream(command, req, parse, on_event=None, cancel=None):
-    started = time.monotonic()
+    # Wall-clock time on purpose: time.monotonic() stops while a Mac sleeps, which once let a
+    # 300 s timeout stretch to hours.
+    started = time.time()
     result = RunResult(ok=False, command=command)
     try:
         proc = subprocess.Popen(command, cwd=req.workdir, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -78,17 +92,21 @@ def run_stream(command, req, parse, on_event=None, cancel=None):
     reader = threading.Thread(target=read_stdout, daemon=True)
     err_reader = threading.Thread(target=lambda: stderr.append(proc.stderr.read()), daemon=True)
     reader.start(); err_reader.start()
-    try:
-        proc.stdin.write(req.prompt)
-        proc.stdin.close()
-    except BrokenPipeError:
-        pass
+    # Write the prompt off the main path: a big prompt fills the pipe, and a CLI that never
+    # reads it would otherwise block us before the timeout loop starts.
+    def write_prompt():
+        try:
+            proc.stdin.write(req.prompt)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+    threading.Thread(target=write_prompt, daemon=True).start()
     reason = None
     while proc.poll() is None:
         if cancel and cancel.is_set():
             reason = 'cancelled'
             break
-        if time.monotonic() - started > req.timeout:
+        if time.time() - started > req.timeout:
             reason = 'timeout'
             break
         time.sleep(0.02)
@@ -104,7 +122,9 @@ def run_stream(command, req, parse, on_event=None, cancel=None):
     proc.wait()
     reader.join(timeout=2); err_reader.join(timeout=2)
     result.exit_code = proc.returncode
-    result.duration_s = time.monotonic() - started
+    result.raw = [line.rstrip('\r\n') for line in lines]
+    result.stderr = ''.join(stderr)
+    result.duration_s = time.time() - started
     if reason:
         result.ok = False
         result.error_kind = reason

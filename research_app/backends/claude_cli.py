@@ -1,5 +1,7 @@
 """Claude Code stream JSON adapter."""
 import json
+import os
+from pathlib import Path
 
 from .base import Event, run_stream
 
@@ -15,8 +17,14 @@ SANDBOX_SETTINGS = json.dumps({"sandbox": {"enabled": True, "autoAllowBashIfSand
 class ClaudeCLI:
     name = 'claude'
 
-    def __init__(self, binary='claude'):
+    def __init__(self, binary='claude', home=None):
         self.binary = binary
+        self.home = Path(home).expanduser() if home is not None else Path(os.environ.get('CLAUDE_CONFIG_DIR', '~/.claude')).expanduser()
+
+    def transcript_path(self, session_id, workdir):
+        if not session_id or not self.home:
+            return None
+        return next((p for p in (self.home / 'projects').glob(f'*/{session_id}.jsonl') if p.is_file()), None)
 
     def run(self, req, on_event=None, cancel=None):
         # dontAsk: anything not on the allow-list is denied, never auto-approved. Without it,

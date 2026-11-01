@@ -72,7 +72,7 @@ class FakeBackend:
         write   {relative path: content} written into req.workdir
         text    final answer text (default "answer from <name>")
         events  list of Event to emit before finishing
-        ok, error_kind, error, sleep, session_id
+        ok, error_kind, error, sleep, session_id, cost (cost_usd as the CLI reports it)
     """
 
     def __init__(self, name, model="fake-model", home=None):
@@ -116,7 +116,7 @@ class FakeBackend:
             with open(self.home / f"{session}.jsonl", "a") as f:
                 f.write(json.dumps({"prompt": req.prompt[:200], "answer": text}) + "\n")
         return RunResult(ok=True, text=text, session_id=session,
-                         usage={"input_tokens": 10, "output_tokens": 5}, cost_usd=0.01,
+                         usage={"input_tokens": 10, "output_tokens": 5}, cost_usd=s.get("cost", 0.01),
                          command=[self.name, "--fake"], exit_code=0, duration_s=0.01,
                          model=self.model, raw=raw, stderr="")
 

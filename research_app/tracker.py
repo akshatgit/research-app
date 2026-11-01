@@ -19,7 +19,7 @@ def _path(workdir, value):
 
 
 def load_tracker(workdir):
-    result = {'stats': [], 'tracks': [], 'errors': []}
+    result = {'stats': [], 'tracks': [], 'errors': [], 'tabs': 'single'}
     file = Path(workdir) / 'tracker.json'
     if not file.exists():
         return result
@@ -30,6 +30,10 @@ def load_tracker(workdir):
     except (OSError, ValueError) as exc:
         result['errors'].append(str(exc))
         return result
+    if data.get('tabs', 'single') in ('single', 'sections'):
+        result['tabs'] = data.get('tabs', 'single')
+    else:
+        result['errors'].append('invalid tabs layout')
     for stat in data.get('stats', []):
         if isinstance(stat, dict) and isinstance(stat.get('label'), str) and stat['label'].strip() and isinstance(stat.get('value'), (int, float, str)):
             result['stats'].append({'label': stat['label'], 'value': stat['value']})
@@ -109,6 +113,12 @@ def build_overview(store, topic_id):
         {'label': 'Threads', 'value': len(store.list_threads(topic_id))},
         {'label': 'Runs', 'value': len(runs)},
         {'label': 'Files', 'value': len(store.list_assets(topic_id))}]
+    sections = split_sections(doc)
+    tabs = [{'id': 'overview', 'title': 'Overview'}]
+    tabs += ([{'id': 'document', 'title': 'Document'}] if tracker['tabs'] == 'single'
+             else [{'id': section['id'], 'title': section['title']} for section in sections])
+    tabs += [{'id': 'assets', 'title': 'Assets'}, {'id': 'runs', 'title': 'Runs'}]
     return {'topic': topic, 'workspace': str(workdir), 'stats': stats, 'tracks': tracks,
-            'sections': split_sections(doc), 'tracks_done': sum(t['status'] == 'done' for t in tracks),
+            'sections': sections, 'layout': tracker['tabs'], 'tabs': tabs,
+            'tracks_done': sum(t['status'] == 'done' for t in tracks),
             'tracks_total': len(tracks), 'generated_at': time.time(), 'errors': tracker['errors']}

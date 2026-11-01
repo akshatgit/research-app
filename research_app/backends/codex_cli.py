@@ -1,12 +1,20 @@
 """Codex CLI JSON event adapter."""
 from .base import Event, run_stream
+import os
+from pathlib import Path
 
 
 class CodexCLI:
     name = 'codex'
 
-    def __init__(self, binary='codex'):
+    def __init__(self, binary='codex', home=None):
         self.binary = binary
+        self.home = Path(home).expanduser() if home is not None else Path(os.environ.get('CODEX_HOME', '~/.codex')).expanduser()
+
+    def transcript_path(self, session_id, workdir):
+        if not session_id or not self.home:
+            return None
+        return next((p for p in (self.home / 'sessions').rglob(f'rollout-*-{session_id}.jsonl') if p.is_file()), None)
 
     def run(self, req, on_event=None, cancel=None):
         if req.session_id:

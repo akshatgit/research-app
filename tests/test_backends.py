@@ -316,3 +316,18 @@ class TestCodex:
         fakecli.configure("codex_ok.jsonl", sleep=30)
         res, _ = run(codex(fakecli), workdir, timeout=1.0)
         assert not res.ok and res.error_kind == "timeout"
+
+
+@pytest.mark.parametrize("cls,name", [(ClaudeCLI, "claude"), (CodexCLI, "codex")])
+def test_timeout_holds_when_cli_never_reads_a_big_prompt(fakecli, workdir, cls, name):
+    """A 1 MB prompt fills the stdin pipe. If the CLI never reads it, writing must not block
+    the run past its timeout (the prompt is written off the main path)."""
+    fakecli.configure("claude_ok.jsonl", ignore_stdin=True, sleep=30)
+    box = {}
+    t = threading.Thread(target=lambda: box.update(res=cls(binary=fakecli.path(name)).run(
+        RunRequest(prompt="z" * 1_000_000, workdir=workdir, timeout=1.0))), daemon=True)
+    t0 = time.time()
+    t.start()
+    t.join(15)
+    assert not t.is_alive(), "run() blocked past its timeout"
+    assert box["res"].error_kind == "timeout" and time.time() - t0 < 15

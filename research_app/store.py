@@ -75,10 +75,31 @@ class Store:
     def _thread_path(self, topic_id, thread_id):
         if not isinstance(thread_id, str) or not thread_id.isalnum():
             raise KeyError(thread_id)
-        p = self.topic_dir(topic_id) / 'threads' / f'{thread_id}.json'
+        base = self.topic_dir(topic_id) / 'threads'
+        p = base / thread_id / 'thread.json'
+        if not p.is_file():
+            p = base / f'{thread_id}.json'
         if not p.is_file():
             raise KeyError(thread_id)
         return p
+
+    def _save_thread(self, topic_id, th):
+        base = self.topic_dir(topic_id) / 'threads'
+        folder = base / th['id']
+        turns = folder / 'turns'
+        turns.mkdir(parents=True, exist_ok=True)
+        for n, turn in enumerate(th['turns'], 1):
+            label = 'user' if turn['role'] == 'user' else turn.get('backend', 'assistant')
+            atomic_write_text(turns / f'{n:03d}-{label}.md', turn.get('text', ''))
+        self._write_json(folder / 'thread.json', th)
+        (base / f"{th['id']}.json").unlink(missing_ok=True)
+
+    def save_turn_record(self, topic_id, thread_id, number, backend, prompt, raw):
+        turns = self.topic_dir(topic_id) / 'threads' / thread_id / 'turns'
+        turns.mkdir(parents=True, exist_ok=True)
+        stem = f'{number:03d}-{backend}'
+        atomic_write_text(turns / f'{stem}.prompt.md', prompt)
+        atomic_write_text(turns / f'{stem}.events.jsonl', ''.join(line + '\n' for line in raw))
 
     def create_thread(self, topic_id, quote, prefix, suffix, start, question, backend, section_id=None):
         d = self.topic_dir(topic_id)
@@ -88,18 +109,21 @@ class Store:
         th = {'id': tid, 'topic_id': topic_id, 'quote': quote, 'prefix': prefix, 'suffix': suffix,
               'start': start, 'section_id': section_id, 'created': time.time(), 'sessions': {}, 'resolved': False, 'resolved_at': None,
               'turns': [{'role': 'user', 'text': question or 'What does this mean?', 'backend': backend, 'at': time.time()}]}
-        self._write_json(d / 'threads' / f'{tid}.json', th)
+        self._save_thread(topic_id, th)
         return th
 
     def get_thread(self, topic_id, thread_id):
         th = json.loads(self._thread_path(topic_id, thread_id).read_text())
+        th.setdefault('sessions', {})
         th.setdefault('resolved', False)
         th.setdefault('resolved_at', None)
         return th
 
     def list_threads(self, topic_id):
         d = self.topic_dir(topic_id)
-        return sorted((self.get_thread(topic_id, p.stem) for p in (d / 'threads').glob('*.json')), key=lambda t: t['created'])
+        ids = {p.stem for p in (d / 'threads').glob('*.json')}
+        ids.update(p.name for p in (d / 'threads').iterdir() if (p / 'thread.json').is_file())
+        return sorted((self.get_thread(topic_id, tid) for tid in ids), key=lambda t: t['created'])
 
     def set_thread_resolved(self, topic_id, thread_id, resolved):
         if not isinstance(resolved, bool):
@@ -108,14 +132,14 @@ class Store:
             th = self.get_thread(topic_id, thread_id)
             th['resolved'] = resolved
             th['resolved_at'] = time.time() if resolved else None
-            self._write_json(self._thread_path(topic_id, thread_id), th)
+            self._save_thread(topic_id, th)
             return th
 
     def append_turn(self, topic_id, thread_id, turn):
         with self.lock:
             th = self.get_thread(topic_id, thread_id)
             th['turns'].append({'at': time.time(), **turn})
-            self._write_json(self._thread_path(topic_id, thread_id), th)
+            self._save_thread(topic_id, th)
             return th
 
     def update_last_turn(self, topic_id, thread_id, **fields):
@@ -124,25 +148,39 @@ class Store:
             th['turns'][-1].update(fields)
             if fields.get('session_id') and th['turns'][-1].get('backend'):
                 th['sessions'][th['turns'][-1]['backend']] = fields['session_id']
-            self._write_json(self._thread_path(topic_id, thread_id), th)
+            self._save_thread(topic_id, th)
             return th
 
     def replace_last_turn(self, topic_id, thread_id, turn):
         with self.lock:
             th = self.get_thread(topic_id, thread_id)
             th['turns'][-1] = {'at': time.time(), **turn}
-            self._write_json(self._thread_path(topic_id, thread_id), th)
+            self._save_thread(topic_id, th)
 
     def delete_thread(self, topic_id, thread_id):
-        self._thread_path(topic_id, thread_id).unlink()
+        path = self._thread_path(topic_id, thread_id)
+        if path.name == 'thread.json':
+            shutil.rmtree(path.parent)
+        else:
+            path.unlink()
 
-    def save_run(self, topic_id, run):
+    def save_run(self, topic_id, run, prompt=None, raw=None, stderr=None):
         d = self.topic_dir(topic_id)
-        self._write_json(d / 'runs' / f"{run['id']}.json", run)
+        folder = d / 'runs' / run['id']
+        folder.mkdir(parents=True, exist_ok=True)
+        self._write_json(folder / 'run.json', run)
+        if prompt is not None:
+            atomic_write_text(folder / 'prompt.md', prompt)
+        if raw is not None:
+            atomic_write_text(folder / 'events.jsonl', ''.join(line + '\n' for line in raw))
+        if stderr is not None:
+            atomic_write_text(folder / 'stderr.log', stderr)
+        (d / 'runs' / f"{run['id']}.json").unlink(missing_ok=True)
 
     def list_runs(self, topic_id):
         d = self.topic_dir(topic_id)
-        return sorted((json.loads(p.read_text()) for p in (d / 'runs').glob('*.json')),
+        paths = list((d / 'runs').glob('*.json')) + list((d / 'runs').glob('*/run.json'))
+        return sorted((json.loads(p.read_text()) for p in paths),
                       key=lambda r: r.get('started', 0), reverse=True)
 
     def list_assets(self, topic_id):
@@ -156,7 +194,7 @@ class Store:
             if not p.is_file() or p.is_symlink():
                 continue
             rel = p.relative_to(d)
-            if any(x.startswith('.') for x in rel.parts) or rel.parts[0] in ('threads', 'runs') or rel.name in ('topic.json', 'doc.md'):
+            if any(x.startswith('.') for x in rel.parts) or rel.parts[0] in ('threads', 'runs', 'sessions') or rel.name in ('topic.json', 'doc.md'):
                 continue
             name = rel.as_posix()
             assets.append({'path': name, 'size': p.stat().st_size,

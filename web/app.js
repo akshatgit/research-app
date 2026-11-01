@@ -3,6 +3,7 @@ import {capture, locate} from './lib/anchor.mjs';
 import {buildSeries, sourceLabel} from './lib/viz.mjs';
 import {parseRoute, routeFor, relativeTime, citationTarget} from './lib/dashboard.mjs';
 import {layoutCards, summarize} from './lib/comments.mjs';
+import {formatUsage} from './lib/usage.mjs';
 
 const $ = selector => document.querySelector(selector);
 const api = async (path, method = 'GET', body) => {
@@ -12,7 +13,7 @@ const api = async (path, method = 'GET', body) => {
 };
 const url = suffix => `/api/topics/${encodeURIComponent(topicId)}${suffix}`;
 const toast = message => {$('#toast').textContent = message; setTimeout(() => {if ($('#toast').textContent === message) $('#toast').textContent = ''}, 5000)};
-let topicId = null, tab = 'overview', overview = null, docVersion = 0, threads = [], selected = null, activeId = null, draft = false, lastRefresh = 0, lastPoll = 0, activeRuns = false;
+let topicId = null, tab = 'overview', overview = null, docVersion = 0, docMarkdown = '', threads = [], selected = null, activeId = null, draft = false, lastRefresh = 0, lastPoll = 0, activeRuns = false;
 const expanded = new Set(JSON.parse(localStorage.getItem('expanded-comments') || '[]'));
 const saveExpanded = () => localStorage.setItem('expanded-comments', JSON.stringify([...expanded]));
 function element(tag, className, text) {const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node}
@@ -34,27 +35,27 @@ async function route() {
   if (!route.topicId) {leaveTopic(); return}
   const changed = route.topicId !== topicId;
   topicId = route.topicId; tab = route.tab;
-  if (changed) {const data = await api(url('')); docVersion = data.doc_version; $('#instruct-form').elements.backend.value = data.topic.backend; threads = await api(url('/threads'))}
+  if (changed) {const data = await api(url('')); docVersion = data.doc_version; docMarkdown = data.doc; $('#instruct-form').elements.backend.value = data.topic.backend; threads = await api(url('/threads'))}
   overview = await api(url('/overview'));
-  if (!['overview', 'assets', 'runs', ...overview.sections.map(section => section.id)].includes(tab)) tab = 'overview';
+  if (!overview.tabs.some(item => item.id === tab)) tab = 'overview';
   setFocus(true); $('#topic-title').textContent = overview.topic.title; $('#workspace').textContent = overview.workspace;
   renderTabs(); await showView(); await showRuns(); markRefreshed();
 }
 function markRefreshed() {lastRefresh = Date.now(); $('#refresh-label').textContent = `refreshed ${new Date(lastRefresh).toLocaleTimeString()} · auto-refresh ${activeRuns ? 2 : 10}s`}
 function renderTabs() {
   const bar = $('#tab-bar'); bar.replaceChildren();
-  for (const item of [{id: 'overview', title: 'Overview'}, ...overview.sections, {id: 'assets', title: 'Assets'}, {id: 'runs', title: 'Runs'}]) {
+  for (const item of overview.tabs) {
     const button = element('button', item.id === tab ? 'active' : '', item.title); button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(item.id === tab)); button.onclick = () => navigate(topicId, item.id); bar.append(button);
   }
 }
 async function showView() {
-  const section = overview.sections.find(item => item.id === tab), content = $('#content');
-  $('#instruct-form').hidden = tab !== 'overview'; $('#section-layout').classList.toggle('with-comments', !!section);
-  $('#comment-margin').hidden = !section; content.replaceChildren(); selected = null; draft = false; $('#comment-button').hidden = true; $('#draft-slot').replaceChildren();
+  const section = overview.sections.find(item => item.id === tab), hasComments = tab === 'document' || !!section, content = $('#content');
+  $('#instruct-form').hidden = tab !== 'overview'; $('#section-layout').classList.toggle('with-comments', hasComments);
+  $('#comment-margin').hidden = !hasComments; content.replaceChildren(); selected = null; draft = false; $('#comment-button').hidden = true; $('#draft-slot').replaceChildren();
   if (tab === 'overview') return renderOverview(content);
   if (tab === 'assets') return renderAssets(content);
   if (tab === 'runs') return renderRuns(content);
-  content.innerHTML = render(section.markdown, {topicId});
+  content.innerHTML = render(tab === 'document' ? docMarkdown : section.markdown, {topicId});
   content.className = 'document';
   await renderCharts(content); await renderMermaid(content); renderComments();
 }
@@ -83,7 +84,7 @@ async function renderAssets(content) {
     if (asset.type.startsWith('image/')) {const image = element('img', 'asset-preview'); image.src = link.href; image.alt = asset.path; content.append(image)}
   }
 }
-async function renderRuns(content) {content.className = 'document'; content.append(element('h2', '', 'Runs')); for (const run of await api(url('/runs'))) content.append(element('p', 'run-row', `${run.kind} · ${run.backend} · ${run.status} · ${run.instruction || ''} · ${Object.values(run.files_changed || {}).flat().join(', ')}`))}
+async function renderRuns(content) {content.className = 'document'; content.append(element('h2', '', 'Runs')); for (const run of await api(url('/runs'))) {const row = element('div', 'run-row'); row.append(element('p', '', `${run.kind} · ${run.backend} · ${run.status} · ${run.instruction || ''} · ${Object.values(run.files_changed || {}).flat().join(', ')}`)); const usage = formatUsage(run.usage, run.cost_usd); if (usage) row.append(element('small', 'muted', usage)); content.append(row)}}
 async function showRuns() {
   const runs = await api(url('/runs')), active = runs.filter(run => ['queued', 'running'].includes(run.status)); activeRuns = active.length > 0;
   const box = $('#run-status'); box.replaceChildren();
@@ -113,7 +114,7 @@ function renderComments() {
   // section_id existed (or imported ones) are placed by searching the text.
   const plainDoc = (overview?.sections || []).map(section => section.markdown).join('\n').replace(/```[\s\S]*?```/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|]/g, ' ');
   const placement = thread => {
-    if (thread.section_id) return thread.section_id !== tab ? 'elsewhere' : (locate(text, thread) ? 'here' : 'orphan');
+    if (thread.section_id && tab !== 'document') return thread.section_id !== tab ? 'elsewhere' : (locate(text, thread) ? 'here' : 'orphan');
     if (locate(text, thread)) return 'here';
     return locate(plainDoc, thread) ? 'elsewhere' : 'orphan';
   };
@@ -137,7 +138,7 @@ function makeCard(thread, orphaned = false, resolved = false) {
   const head = element('button', 'comment-summary'); head.type = 'button'; head.append(element('strong', '', state.quote), element('span', '', state.question), element('small', '', `${state.replies} ${state.replies === 1 ? 'reply' : 'replies'} · ${state.status}${orphaned ? ' · orphaned' : ''}`));
   head.onclick = () => {activeId = thread.id; if (expanded.has(thread.id)) expanded.delete(thread.id); else expanded.add(thread.id); saveExpanded(); renderComments(); if (!orphaned && !resolved) $('#content').querySelector(`mark[data-thread="${CSS.escape(thread.id)}"]`)?.scrollIntoView({behavior:'smooth',block:'center'})}; card.append(head);
   if (!expanded.has(thread.id) || resolved) {if (resolved) addResolveButton(card, thread, false); return card}
-  for (const turn of thread.turns) {const div = element('div', 'turn'); div.append(element('small', '', `${turn.role} · ${turn.backend || ''}${turn.model ? ' · ' + turn.model : ''}${turn.status ? ' · ' + turn.status : ''}`)); const body = element('div'); body.innerHTML = render(turn.text || turn.error || '', {topicId}); div.append(body); card.append(div)}
+  for (const turn of thread.turns) {const div = element('div', 'turn'); div.append(element('small', '', `${turn.role} · ${turn.backend || ''}${turn.model ? ' · ' + turn.model : ''}${turn.status ? ' · ' + turn.status : ''}`)); const body = element('div'); body.innerHTML = render(turn.text || turn.error || '', {topicId}); div.append(body); if (turn.role === 'assistant') {const usage = formatUsage(turn.usage, turn.cost_usd); if (usage) div.append(element('small', 'muted', usage))} card.append(div)}
   const form = element('form', 'reply-form'), question = element('textarea'); question.required = true; question.placeholder = 'Reply'; const backend = backendSelect(thread.turns.at(-1)?.backend || overview.topic.backend), submit = element('button', '', 'Reply'); form.append(question, backend, submit);
   form.onsubmit = async event => {event.preventDefault(); try {await api(url(`/threads/${thread.id}/turns`), 'POST', {question: question.value, backend: backend.value}); await refreshThreads()} catch(error) {toast(error.message)}}; card.append(form);
   addResolveButton(card, thread, true);
@@ -147,10 +148,10 @@ function makeCard(thread, orphaned = false, resolved = false) {
 }
 function addResolveButton(card, thread, value) {const button = element('button', '', value ? 'Resolve' : 'Reopen'); button.onclick = async () => {try {await api(url(`/threads/${thread.id}/resolve`), 'POST', {resolved: value}); await refreshThreads()} catch(error) {toast(error.message)}}; card.append(button)}
 function backendSelect(value) {const select = element('select'); for (const name of ['claude', 'codex']) {const option = element('option', '', name); option.value = name; select.append(option)} select.value = value; return select}
-async function refreshThreads() {threads = await api(url('/threads')); if (overview.sections.some(section => section.id === tab)) {$('#content').innerHTML = render(overview.sections.find(section => section.id === tab).markdown, {topicId}); await renderCharts($('#content')); await renderMermaid($('#content')); renderComments()}}
+async function refreshThreads() {threads = await api(url('/threads')); if (tab === 'document' || overview.sections.some(section => section.id === tab)) {$('#content').innerHTML = render(tab === 'document' ? docMarkdown : overview.sections.find(section => section.id === tab).markdown, {topicId}); await renderCharts($('#content')); await renderMermaid($('#content')); renderComments()}}
 function draftCard() {
   draft = true; const slot = $('#draft-slot'); slot.replaceChildren(); const card = element('form', 'comment-card draft'); card.append(element('small', '', selected.quote)); const question = element('textarea'); question.value = 'What does this mean?'; question.required = true; const backend = backendSelect(overview.topic.backend); const submit = element('button', '', 'Comment'), cancel = element('button', '', 'Cancel'); cancel.type = 'button'; cancel.onclick = () => {draft = false; slot.replaceChildren()}; card.append(question, backend, submit, cancel);
-  card.onsubmit = async event => {event.preventDefault(); try {const thread = await api(url('/threads'), 'POST', {...selected, section_id: tab, question: question.value, backend: backend.value}); expanded.add(thread.id); activeId = thread.id; saveExpanded(); draft = false; slot.replaceChildren(); await refreshThreads()} catch(error) {toast(error.message)}};
+  card.onsubmit = async event => {event.preventDefault(); try {const thread = await api(url('/threads'), 'POST', {...selected, section_id: tab === 'document' ? null : tab, question: question.value, backend: backend.value}); expanded.add(thread.id); activeId = thread.id; saveExpanded(); draft = false; slot.replaceChildren(); await refreshThreads()} catch(error) {toast(error.message)}};
   slot.append(card); slot.style.top = $('#comment-button').style.top; $('#comment-button').hidden = true; question.focus();
 }
 async function renderCharts(root) {
@@ -184,10 +185,10 @@ async function renderMermaid(root) {if (!root.querySelector('.mermaid')) return;
 $('#new-topic').onsubmit = async event => {event.preventDefault(); const form = event.currentTarget; try {const topic = await api('/api/topics', 'POST', {title: form.elements.title.value, focus: form.elements.focus.value, backend: form.elements.backend.value}); form.reset(); await refreshTopics(); navigate(topic.id)} catch(error) {toast(error.message)}};
 $('#instruct-form').onsubmit = async event => {event.preventDefault(); const form = event.currentTarget; try {await api(url('/instruct'), 'POST', {instruction: form.elements.instruction.value, backend: form.elements.backend.value}); form.elements.instruction.value = ''; await showRuns(); overview = await api(url('/overview')); await showView()} catch(error) {toast(error.message)}};
 $('#back-to-topics').onclick = () => {leaveTopic(); refreshTopics().catch(error => toast(error.message))};
-$('#content').addEventListener('mouseup', () => {if (!overview?.sections.some(section => section.id === tab)) return; const selection = window.getSelection(), root = $('#content'); if (!selection || selection.isCollapsed || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return; const text = root.textContent, start = textOffset(root, selection.anchorNode, selection.anchorOffset), end = textOffset(root, selection.focusNode, selection.focusOffset); selected = capture(text, Math.min(start, end), Math.max(start, end)); if (!selected.quote.trim()) return; const rect = selection.getRangeAt(0).getBoundingClientRect(), container = root.getBoundingClientRect(); const button = $('#comment-button'); button.style.top = `${Math.max(0, rect.top - container.top)}px`; button.hidden = false});
+$('#content').addEventListener('mouseup', () => {if (!(tab === 'document' || overview?.sections.some(section => section.id === tab))) return; const selection = window.getSelection(), root = $('#content'); if (!selection || selection.isCollapsed || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return; const text = root.textContent, start = textOffset(root, selection.anchorNode, selection.anchorOffset), end = textOffset(root, selection.focusNode, selection.focusOffset); selected = capture(text, Math.min(start, end), Math.max(start, end)); if (!selected.quote.trim()) return; const rect = selection.getRangeAt(0).getBoundingClientRect(), container = root.getBoundingClientRect(); const button = $('#comment-button'); button.style.top = `${Math.max(0, rect.top - container.top)}px`; button.hidden = false});
 $('#comment-button').onclick = draftCard;
-document.addEventListener('click', event => {const citation = event.target.closest('a[href^="#src-"]'); if (!citation || !overview) return; const target = citationTarget(citation.getAttribute('href').slice(5), overview.sections); if (target) {event.preventDefault(); navigate(topicId, target.tab); setTimeout(() => document.getElementById(target.anchor)?.scrollIntoView({behavior: 'smooth'}), 100)}});
+document.addEventListener('click', event => {const citation = event.target.closest('a[href^="#src-"]'); if (!citation || !overview) return; const target = citationTarget(citation.getAttribute('href').slice(5), overview.tabs); if (target) {event.preventDefault(); navigate(topicId, target.tab); setTimeout(() => document.getElementById(target.anchor)?.scrollIntoView({behavior: 'smooth'}), 100)}});
 addEventListener('popstate', () => route().catch(error => toast(error.message)));
-addEventListener('resize', () => {if (topicId && overview?.sections.some(section => section.id === tab)) renderComments()});
-async function poll() {if (topicId && (activeRuns || Date.now() - lastPoll >= 10000)) try {lastPoll = Date.now(); const version = await api(url('/version')); if (version.doc_version !== docVersion || version.active_runs || activeRuns) {const data = await api(url('')); docVersion = data.doc_version; overview = await api(url('/overview')); threads = await api(url('/threads')); renderTabs(); await showView()} await showRuns()} catch(error) {toast(error.message)} setTimeout(poll, 2000)}
+addEventListener('resize', () => {if (topicId && (tab === 'document' || overview?.sections.some(section => section.id === tab))) renderComments()});
+async function poll() {if (topicId && (activeRuns || Date.now() - lastPoll >= 10000)) try {lastPoll = Date.now(); const version = await api(url('/version')); if (version.doc_version !== docVersion || version.active_runs || activeRuns) {const data = await api(url('')); docVersion = data.doc_version; docMarkdown = data.doc; overview = await api(url('/overview')); threads = await api(url('/threads')); renderTabs(); await showView()} await showRuns()} catch(error) {toast(error.message)} setTimeout(poll, 2000)}
 setFocus(false); refreshTopics().then(() => route()).catch(error => toast(error.message)); setTimeout(poll, 2000);

@@ -18,6 +18,8 @@ export function relativeTime(ts, now = Date.now() / 1000) {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-export function citationTarget(n, sections) {
-  return sections.some(section => section.id === 'sources') ? {tab: 'sources', anchor: `src-${n}`} : null;
+export function citationTarget(n, tabs) {
+  const tab = tabs.some(item => item.id === 'sources') ? 'sources' :
+    tabs.some(item => item.id === 'document') ? 'document' : null;
+  return tab ? {tab, anchor: `src-${n}`} : null;
 }

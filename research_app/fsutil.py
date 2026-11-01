@@ -25,7 +25,7 @@ def safe_join(root, relative):
     p = Path(relative)
     if not p.parts or p.is_absolute() or any(x in ('', '.', '..') or x.startswith('.') for x in p.parts):
         raise ValueError('invalid workspace path')
-    if p.parts[0] in ('threads', 'runs') or p.parts[0] == 'topic.json':
+    if p.parts[0] in ('threads', 'runs', 'sessions') or p.parts[0] == 'topic.json':
         raise ValueError('internal workspace path')
     result = (root / p).resolve()
     if not result.is_relative_to(root):
@@ -40,7 +40,7 @@ def snapshot(root):
         if not path.is_file() or path.is_symlink():
             continue
         rel = path.relative_to(root)
-        if any(part.startswith('.') for part in rel.parts) or rel.parts[0] in ('threads', 'runs') or rel.name == 'topic.json':
+        if any(part.startswith('.') for part in rel.parts) or rel.parts[0] in ('threads', 'runs', 'sessions') or rel.name == 'topic.json':
             continue
         result[rel.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     return result

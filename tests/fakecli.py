@@ -7,6 +7,7 @@ $FAKECLI_CONFIG:
     exit_code    process exit code (default 0)
     stderr       text to print to stderr
     sleep        seconds to sleep before printing (for timeout/cancel tests)
+    ignore_stdin never read stdin (a CLI stuck before reading its prompt)
     line_delay   seconds to sleep between lines
     write_files  {relative path: content} written into the working directory
     record       path of a JSON file to write: argv, cwd, stdin, pid
@@ -36,7 +37,7 @@ def read_stdin():
     return sys.stdin.read()
 
 
-stdin = read_stdin()
+stdin = "<NOT-READ>" if cfg.get("ignore_stdin") else read_stdin()
 if cfg.get("record"):
     with open(cfg["record"], "w") as f:
         json.dump({"argv": sys.argv, "cwd": os.getcwd(), "stdin": stdin, "pid": os.getpid(),
