@@ -17,7 +17,8 @@ let topicId = null, tab = 'overview', overview = null, docVersion = 0, docMarkdo
 let openThreadId = null;
 const expanded = new Set(JSON.parse(localStorage.getItem('expanded-comments') || '[]'));
 const saveExpanded = () => localStorage.setItem('expanded-comments', JSON.stringify([...expanded]));
-let commentsHidden = localStorage.getItem('comments-hidden') === 'true';
+// Comments live in the pop-up; the document shows only highlights (no margin to hide).
+let commentsHidden = false; try {localStorage.removeItem('comments-hidden')} catch {}
 function element(tag, className, text) {const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node}
 function setFocus(on) {document.body.classList.toggle('focus', on); $('#back-to-topics').hidden = !on}
 async function refreshTopics() {
@@ -53,7 +54,8 @@ function renderTabs() {
 async function showView() {
   const section = overview.sections.find(item => item.id === tab), hasComments = tab === 'document' || !!section, content = $('#content');
   $('#instruct-form').hidden = tab !== 'overview'; $('#section-layout').classList.toggle('with-comments', hasComments && !commentsHidden);
-  $('#comment-margin').hidden = !hasComments || commentsHidden; $('#show-comments').hidden = !hasComments || !commentsHidden;
+  $('#comment-margin').hidden = true; $('#show-comments').hidden = true;
+  $('#comments-list').hidden = !hasComments; $('#comments-list').textContent = `Comments (${threads.length})`;
   $('#show-comments').textContent = `Show comments (${threads.filter(thread => !thread.resolved).length})`;
   content.replaceChildren(); selected = null; draft = false; $('#comment-button').hidden = true; $('#draft-slot').replaceChildren();
   if (tab === 'overview') return renderOverview(content);
@@ -198,6 +200,28 @@ function intentComposer(defaultBackend, placeholder, send) {
 }
 async function reloadTopic() {const data = await api(url('')); docVersion = data.doc_version; docMarkdown = data.doc; overview = await api(url('/overview')); threads = await api(url('/threads')); renderTabs(); await showView()}
 async function refreshThreads() {threads = await api(url('/threads')); if (tab === 'document' || overview.sections.some(section => section.id === tab)) {$('#content').innerHTML = render(tab === 'document' ? docMarkdown : overview.sections.find(section => section.id === tab).markdown, {topicId}); await renderCharts($('#content')); await renderMermaid($('#content')); renderComments()} if (openThreadId) renderDialog()}
+// A new comment opens straight in the pop-up, quote on top and the composer below.
+function openDraft() {
+  if (!selected?.quote?.trim()) return;
+  const quote = selected; $('#comment-button').hidden = true; openThreadId = null;
+  $('#dialog-quote').textContent = quote.quote; $('#dialog-body').replaceChildren(element('p', 'muted', 'Ask anything about this passage. The reply explains, edits the document, or starts a task, depending on what you write.'));
+  const footer = $('#dialog-footer'); footer.replaceChildren();
+  const form = intentComposer(overview.topic.backend, 'What does this mean?', async (question, backend, intent) => {const thread = await api(url('/threads'), 'POST', {...quote, section_id: tab === 'document' ? null : tab, question, backend, intent}); await refreshThreads(); openThread(thread.id)});
+  footer.append(form); if (!$('#thread-dialog').open) $('#thread-dialog').showModal(); form.querySelector('textarea').focus();
+}
+// Every comment in one list, including resolved ones and ones whose passage is gone.
+function openCommentList() {
+  openThreadId = null; $('#dialog-quote').textContent = `${threads.length} comment${threads.length === 1 ? '' : 's'}`;
+  const body = $('#dialog-body'); body.replaceChildren(); $('#dialog-footer').replaceChildren();
+  for (const thread of threads) {
+    const latest = [...thread.turns].reverse().find(turn => turn.role === 'assistant'), item = element('button', 'comment-list-item'); item.type = 'button';
+    const flags = [thread.resolved ? 'resolved' : '', !thread.resolved && !document.querySelector(`mark[data-thread="${CSS.escape(thread.id)}"]`) ? 'no highlight here' : ''].filter(Boolean).join(' · ');
+    item.append(element('strong', '', thread.quote), inline(latest?.tldr || thread.turns[0]?.text || '', 'span'), element('small', 'muted', `${((n) => `${n} answer${n === 1 ? '' : 's'}`)(thread.turns.filter(turn => turn.role === 'assistant').length)}${flags ? ' · ' + flags : ''}`));
+    item.onclick = () => openThread(thread.id); body.append(item);
+  }
+  if (!threads.length) body.append(element('p', 'muted', 'No comments yet. Select text in the document to add one.'));
+  if (!$('#thread-dialog').open) $('#thread-dialog').showModal();
+}
 function draftCard() {
   draft = true; const slot = $('#draft-slot'); slot.replaceChildren(); const card = element('div', 'comment-card draft'); card.append(element('small', '', selected.quote));
   const form = intentComposer(overview.topic.backend, 'What does this mean?', async (question, backend, intent) => {const thread = await api(url('/threads'), 'POST', {...selected, section_id: tab === 'document' ? null : tab, question, backend, intent}); expanded.add(thread.id); activeId = thread.id; saveExpanded(); draft = false; slot.replaceChildren(); await refreshThreads(); openThread(thread.id)});
@@ -238,8 +262,11 @@ $('#thread-dialog').addEventListener('click', event => {if (event.target === $('
 $('#thread-dialog').addEventListener('close', () => {openThreadId = null});
 $('#instruct-form').onsubmit = async event => {event.preventDefault(); const form = event.currentTarget; try {await api(url('/instruct'), 'POST', {instruction: form.elements.instruction.value, backend: form.elements.backend.value}); form.elements.instruction.value = ''; await showRuns(); overview = await api(url('/overview')); await showView()} catch(error) {toast(error.message)}};
 $('#back-to-topics').onclick = () => {leaveTopic(); refreshTopics().catch(error => toast(error.message))};
-$('#content').addEventListener('mouseup', () => {if (!(tab === 'document' || overview?.sections.some(section => section.id === tab))) return; const selection = window.getSelection(), root = $('#content'); if (!selection || selection.isCollapsed || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return; const text = root.textContent, start = textOffset(root, selection.anchorNode, selection.anchorOffset), end = textOffset(root, selection.focusNode, selection.focusOffset); selected = capture(text, Math.min(start, end), Math.max(start, end)); if (!selected.quote.trim()) return; const rect = selection.getRangeAt(0).getBoundingClientRect(), container = root.getBoundingClientRect(); const button = $('#comment-button'); button.style.top = `${Math.max(0, rect.top - container.top)}px`; button.hidden = false});
-$('#comment-button').onclick = draftCard;
+$('#content').addEventListener('mouseup', () => {if (!(tab === 'document' || overview?.sections.some(section => section.id === tab))) return; const selection = window.getSelection(), root = $('#content'); if (!selection || selection.isCollapsed || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return; const text = root.textContent, start = textOffset(root, selection.anchorNode, selection.anchorOffset), end = textOffset(root, selection.focusNode, selection.focusOffset); selected = capture(text, Math.min(start, end), Math.max(start, end)); if (!selected.quote.trim()) return; const rect = selection.getRangeAt(0).getBoundingClientRect(), container = root.getBoundingClientRect(); const button = $('#comment-button'); // Float the button just above the end of the selection (below it near the top), kept inside the window.
+  button.style.top = `${rect.top > 44 ? rect.top - 36 : Math.min(innerHeight - 40, rect.bottom + 6)}px`; button.style.left = `${Math.min(innerWidth - 110, Math.max(8, rect.right - 40))}px`; button.hidden = false});
+document.addEventListener('selectionchange', () => {if (window.getSelection()?.isCollapsed) setTimeout(() => {if (window.getSelection()?.isCollapsed) $('#comment-button').hidden = true}, 150)});
+$('#comment-button').onclick = openDraft;
+$('#comments-list').onclick = openCommentList;
 $('#collapse-all').onclick = () => {expanded.clear(); activeId = null; saveExpanded(); renderComments()};
 $('#hide-comments').onclick = () => {commentsHidden = true; localStorage.setItem('comments-hidden', 'true'); $('#comment-margin').hidden = true; $('#section-layout').classList.remove('with-comments'); $('#show-comments').hidden = false; $('#show-comments').textContent = `Show comments (${threads.filter(thread => !thread.resolved).length})`};
 $('#show-comments').onclick = () => {commentsHidden = false; localStorage.setItem('comments-hidden', 'false'); $('#comment-margin').hidden = false; $('#section-layout').classList.add('with-comments'); $('#show-comments').hidden = true; renderComments()};
